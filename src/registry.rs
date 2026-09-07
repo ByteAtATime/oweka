@@ -38,10 +38,33 @@ impl Matcher for Target {
     }
 }
 
+pub struct Venv;
+
+impl Matcher for Venv {
+    fn id(&self) -> &'static str {
+        "venv"
+    }
+
+    fn matches(&self, dir: &Path) -> bool {
+        if !dir
+            .file_name()
+            .is_some_and(|name| name == ".venv" || name == "venv" || name == ".virtualenv")
+        {
+            return false;
+        }
+        dir.join("pyvenv.cfg").is_file()
+    }
+
+    fn deletion_policy(&self) -> DeletionPolicy {
+        DeletionPolicy::Confirm
+    }
+}
+
 static NODE_MODULES: NodeModules = NodeModules;
 static TARGET: Target = Target;
+static VENV: Venv = Venv;
 
-pub static REGISTRY: &[&dyn Matcher] = &[&NODE_MODULES, &TARGET];
+pub static REGISTRY: &[&dyn Matcher] = &[&NODE_MODULES, &TARGET, &VENV];
 
 pub fn claim(dir: &Path) -> Option<&'static str> {
     REGISTRY
