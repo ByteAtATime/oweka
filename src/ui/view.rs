@@ -41,6 +41,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
     let status = scan_status(app);
     let title = Line::from(vec![
         Span::styled("oweka", Style::default().add_modifier(Modifier::BOLD)),
@@ -50,9 +53,63 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().add_modifier(Modifier::BOLD),
         ),
     ]);
-    let rule = "─".repeat(area.width.max(1) as usize).dim();
-    let block = Paragraph::new(vec![title, rule.into()]);
-    frame.render_widget(block, area);
+    let hint = header_hint(app);
+    let hint_width = hint.width() as u16;
+    let top = Rect::new(area.x, area.y, area.width, 1);
+    if hint_width == 0 || area.width < hint_width + 12 {
+        let block = Paragraph::new(vec![title, rule_line(area.width)]);
+        frame.render_widget(block, area);
+        return;
+    }
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(hint_width)])
+        .split(top);
+    frame.render_widget(Paragraph::new(title), columns[0]);
+    frame.render_widget(Paragraph::new(hint.alignment(Alignment::Right)), columns[1]);
+    if area.height > 1 {
+        let rule_area = Rect::new(area.x, area.y + 1, area.width, 1);
+        frame.render_widget(Paragraph::new(rule_line(area.width)), rule_area);
+    }
+}
+
+fn header_hint(app: &App) -> Line<'static> {
+    if app.pending_confirm().is_some() {
+        hint_line(&[("y", "confirm"), ("n", "cancel")])
+    } else if !app.is_done() {
+        hint_line(&[("q", "quit")])
+    } else {
+        hint_line(&[
+            ("j/k/arrows", "move"),
+            ("enter/space", "delete"),
+            ("q", "quit"),
+        ])
+    }
+}
+
+fn hint_line(pairs: &[(&'static str, &'static str)]) -> Line<'static> {
+    let mut spans = Vec::with_capacity(pairs.len() * 2);
+    for (index, (key, label)) in pairs.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(
+                " · ",
+                Style::default().add_modifier(Modifier::DIM),
+            ));
+        }
+        spans.push(Span::styled(
+            (*key).to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn rule_line(width: u16) -> Line<'static> {
+    Line::from("─".repeat(width.max(1) as usize).dim())
 }
 
 fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
