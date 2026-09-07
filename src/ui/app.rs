@@ -19,6 +19,8 @@ struct Pending {
     note: Option<&'static str>,
 }
 
+const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+
 pub(super) struct Row {
     pub(super) artifact: Artifact,
     path_hash: u64,
@@ -50,7 +52,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(root: PathBuf) -> App {
+    pub fn new(root: PathBuf, started: Instant) -> App {
         App {
             root,
             rows: Vec::new(),
@@ -58,7 +60,7 @@ impl App {
             errors: Vec::new(),
             freed_bytes: 0,
             done: false,
-            started: Instant::now(),
+            started,
             finished: None,
             scroll: 0,
             page_size: 0,
@@ -185,12 +187,16 @@ impl App {
         self.done
     }
 
-    pub(super) fn started(&self) -> Instant {
-        self.started
-    }
-
-    pub(super) fn finished(&self) -> Option<Instant> {
-        self.finished
+    pub fn scan_status(&self, now: Instant) -> String {
+        if self.done {
+            let elapsed = self
+                .finished
+                .map(|end| end.duration_since(self.started).as_secs_f32())
+                .unwrap_or(0.0);
+            return format!("done in {elapsed:.1}s");
+        }
+        let tick = now.duration_since(self.started).as_millis() / 200 % SPINNER.len() as u128;
+        format!("scanning {}", SPINNER[tick as usize])
     }
 
     pub(super) fn table_state_mut(&mut self) -> &mut TableState {
@@ -343,6 +349,7 @@ fn shift_after_removal(selected: usize, removed: usize, remaining: usize) -> usi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn artifact(matcher_id: &'static str, name: &str) -> Artifact {
         Artifact {
@@ -352,7 +359,7 @@ mod tests {
     }
 
     fn streaming_app() -> App {
-        let mut app = App::new(PathBuf::from("/root"));
+        let mut app = App::new(PathBuf::from("/root"), Instant::now());
         app.apply(ScanEvent::Found {
             artifact: artifact("node_modules", "/root/a"),
         });

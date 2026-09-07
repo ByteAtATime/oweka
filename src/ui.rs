@@ -6,7 +6,7 @@ use std::io::{self, Stdout};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -63,12 +63,14 @@ fn install_restore_hook() {
 fn run_loop(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal: Terminal<CrosstermBackend<Stdout>> = Terminal::new(backend)?;
-    let mut app = App::new(root.to_path_buf());
+    let mut app = App::new(root.to_path_buf(), Instant::now());
     let (ui_sender, ui_events) = mpsc::channel();
     spawn_event_thread(ui_sender.clone());
     spawn_scan_bridge(scan_events, ui_sender.clone());
     loop {
-        terminal.draw(|frame| view::draw(frame, &mut app))?;
+        let now = Instant::now();
+        let wall = SystemTime::now();
+        terminal.draw(|frame| view::draw(frame, &mut app, now, wall))?;
         match next_ui_event(&ui_events, &mut app)? {
             UiEvent::Key(key) => {
                 if handle_key(&mut app, key, &ui_sender) {

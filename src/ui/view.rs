@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -21,9 +21,8 @@ const HIGHLIGHT_SYMBOL: &str = "▸ ";
 const HIGHLIGHT_WIDTH: u16 = 2;
 const COLUMN_SPACING: u16 = 1;
 const COLUMN_GAP_COUNT: u16 = 3;
-const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
 
-pub fn draw(frame: &mut Frame, app: &mut App) {
+pub fn draw(frame: &mut Frame, app: &mut App, now: Instant, wall: SystemTime) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -32,17 +31,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Constraint::Length(1),
         ])
         .split(frame.area());
-    draw_header(frame, app, areas[0]);
-    draw_table(frame, app, areas[1]);
+    draw_header(frame, app, areas[0], now);
+    draw_table(frame, app, areas[1], wall);
     draw_status(frame, app, areas[2]);
-    draw_confirm(frame, app);
+    draw_confirm(frame, app, wall);
 }
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_header(frame: &mut Frame, app: &App, area: Rect, now: Instant) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let status = scan_status(app);
+    let status = app.scan_status(now);
     let title = Line::from(vec![
         Span::styled("oweka", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(format!(" · {} · {} ", app.root().display(), status)),
@@ -111,7 +110,7 @@ fn rule_line(width: u16) -> Line<'static> {
     Line::from("─".repeat(width.max(1) as usize).dim())
 }
 
-fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
+fn draw_table(frame: &mut Frame, app: &mut App, area: Rect, wall: SystemTime) {
     if app.is_empty() {
         let message = empty_message(app);
         let hint = Paragraph::new(Line::from(Span::styled(
@@ -121,7 +120,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(hint, area);
         return;
     }
-    let now = SystemTime::now();
+    let now = wall;
     let path_width = path_column_width(area);
     let visible_rows = area.height.saturating_sub(1) as usize;
     app.set_page_size(visible_rows);
@@ -197,7 +196,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     app.set_render_selection(selection);
 }
 
-fn draw_confirm(frame: &mut Frame, app: &App) {
+fn draw_confirm(frame: &mut Frame, app: &App, wall: SystemTime) {
     let Some((pending, note)) = app.pending_confirm() else {
         return;
     };
@@ -207,7 +206,7 @@ fn draw_confirm(frame: &mut Frame, app: &App) {
         return;
     }
     let max_inner = max_inner_width(frame_area) as usize;
-    let now = SystemTime::now();
+    let now = wall;
     let row = app.row_for(pending);
 
     let size = row
@@ -364,18 +363,6 @@ fn path_column_width(area: Rect) -> usize {
             + SIZE_WIDTH
             + COLUMN_GAP_COUNT * COLUMN_SPACING,
     ) as usize
-}
-
-fn scan_status(app: &App) -> String {
-    if app.is_done() {
-        let elapsed = app
-            .finished()
-            .map(|end| end.duration_since(app.started()).as_secs_f32())
-            .unwrap_or(0.0);
-        return format!("done in {elapsed:.1}s");
-    }
-    let tick = app.started().elapsed().as_millis() / 200 % SPINNER.len() as u128;
-    format!("scanning {}", SPINNER[tick as usize])
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
