@@ -12,8 +12,6 @@ use ratatui::widgets::{
 
 use super::app::App;
 use super::format::{PENDING, age_style, display_path, format_size, relative_age, truncate_left};
-use crate::matcher::DeletionPolicy;
-use crate::registry::matcher_for;
 
 const PATH_MIN_WIDTH: u16 = 8;
 const MATCHER_WIDTH: u16 = 13;
@@ -200,7 +198,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_confirm(frame: &mut Frame, app: &App) {
-    let Some(pending) = app.pending_confirm() else {
+    let Some((pending, note)) = app.pending_confirm() else {
         return;
     };
 
@@ -244,11 +242,6 @@ fn draw_confirm(frame: &mut Frame, app: &App) {
         "This cannot be undone.",
         Style::default().fg(Color::DarkGray),
     ));
-    let note =
-        matcher_for(pending.matcher_id).and_then(|matcher| match matcher.deletion_policy() {
-            DeletionPolicy::Confirm(note) => note,
-            _ => None,
-        });
     let note_line = note.map(|text| {
         Line::from(Span::styled(
             text.to_string(),

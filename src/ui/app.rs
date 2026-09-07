@@ -14,6 +14,11 @@ struct ScanError {
     reason: String,
 }
 
+struct Pending {
+    artifact: Artifact,
+    note: Option<&'static str>,
+}
+
 pub(super) struct Row {
     pub(super) artifact: Artifact,
     path_hash: u64,
@@ -41,7 +46,7 @@ pub struct App {
     scroll: usize,
     page_size: usize,
     table_state: TableState,
-    pending: Option<Artifact>,
+    pending: Option<Pending>,
 }
 
 impl App {
@@ -120,26 +125,28 @@ impl App {
         }
     }
 
-    pub fn open_confirm(&mut self, artifact: Artifact) {
-        self.pending = Some(artifact);
+    pub fn open_confirm(&mut self, artifact: Artifact, note: Option<&'static str>) {
+        self.pending = Some(Pending { artifact, note });
     }
 
     pub fn cancel_confirm(&mut self) {
         self.pending = None;
     }
 
-    pub fn pending_confirm(&self) -> Option<&Artifact> {
-        self.pending.as_ref()
+    pub fn pending_confirm(&self) -> Option<(&Artifact, Option<&'static str>)> {
+        self.pending
+            .as_ref()
+            .map(|pending| (&pending.artifact, pending.note))
     }
 
     pub fn confirm_pending(&mut self) -> Option<Artifact> {
-        let artifact = self.pending.take()?;
-        let row = find_row_mut(&mut self.rows, &artifact)?;
+        let pending = self.pending.take()?;
+        let row = find_row_mut(&mut self.rows, &pending.artifact)?;
         if row.deleting {
             return None;
         }
         row.deleting = true;
-        Some(artifact)
+        Some(pending.artifact)
     }
 
     pub fn apply_delete_result(&mut self, result: DeleteResult) {
@@ -383,15 +390,15 @@ mod tests {
         let mut app = streaming_app();
         app.apply(ScanEvent::Done);
         let target = artifact("venv", "/root/b");
-        app.open_confirm(target.clone());
-        assert_eq!(app.pending_confirm(), Some(&target));
+        app.open_confirm(target.clone(), None);
+        assert_eq!(app.pending_confirm(), Some((&target, None)));
     }
 
     #[test]
     fn canceling_confirmation_marks_no_row_deleting() {
         let mut app = streaming_app();
         app.apply(ScanEvent::Done);
-        app.open_confirm(artifact("venv", "/root/b"));
+        app.open_confirm(artifact("venv", "/root/b"), None);
         app.cancel_confirm();
         assert_eq!(app.pending_confirm(), None);
         assert!(app.rows().iter().all(|row| !row.deleting));
@@ -401,7 +408,7 @@ mod tests {
     fn confirming_marks_row_by_path_not_selection() {
         let mut app = streaming_app();
         app.apply(ScanEvent::Done);
-        app.open_confirm(artifact("node_modules", "/root/b"));
+        app.open_confirm(artifact("node_modules", "/root/b"), None);
         app.move_cursor(-1);
         let confirmed = app.confirm_pending();
         assert_eq!(confirmed, Some(artifact("node_modules", "/root/b")));
@@ -419,7 +426,7 @@ mod tests {
     fn confirming_missing_row_clears_pending_without_panic() {
         let mut app = streaming_app();
         app.apply(ScanEvent::Done);
-        app.open_confirm(artifact("venv", "/root/gone"));
+        app.open_confirm(artifact("venv", "/root/gone"), None);
         let confirmed = app.confirm_pending();
         assert_eq!(confirmed, None);
         assert_eq!(app.pending_confirm(), None);
