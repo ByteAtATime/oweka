@@ -185,7 +185,7 @@ fn request_deletion(app: &mut App, sender: Sender<UiEvent>) {
             app.mark_deleting(&artifact);
             spawn_worker(sender, artifact);
         }
-        Some(DeletionPolicy::Confirm) => {
+        Some(DeletionPolicy::Confirm(_)) => {
             app.open_confirm(artifact);
         }
         None => {}

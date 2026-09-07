@@ -56,7 +56,7 @@ impl Matcher for Venv {
     }
 
     fn deletion_policy(&self) -> DeletionPolicy {
-        DeletionPolicy::Confirm
+        DeletionPolicy::Confirm(Some("Ensure dependencies are exported to requirements.txt"))
     }
 }
 
@@ -75,4 +75,23 @@ pub fn claim(dir: &Path) -> Option<&'static str> {
 
 pub fn matcher_for(id: &str) -> Option<&'static dyn Matcher> {
     REGISTRY.iter().find(|matcher| matcher.id() == id).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn venv_confirm_carries_export_caution() {
+        let root = tempfile::tempdir().unwrap();
+        let venv = root.path().join(".venv");
+        std::fs::create_dir(&venv).unwrap();
+        std::fs::write(venv.join("pyvenv.cfg"), "").unwrap();
+        let id = claim(&venv).unwrap();
+        let matcher = matcher_for(id).unwrap();
+        assert_eq!(
+            matcher.deletion_policy(),
+            DeletionPolicy::Confirm(Some("Ensure dependencies are exported to requirements.txt"))
+        );
+    }
 }

@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, ToLine};
 use ratatui::widgets::{
     Block, BorderType, Borders, Cell, Clear, HighlightSpacing, Padding, Paragraph, Row as TableRow,
     Table,
@@ -12,6 +12,8 @@ use ratatui::widgets::{
 
 use super::app::App;
 use super::format::{PENDING, age_style, display_path, format_size, relative_age, truncate_left};
+use crate::matcher::DeletionPolicy;
+use crate::registry::matcher_for;
 
 const PATH_MIN_WIDTH: u16 = 8;
 const MATCHER_WIDTH: u16 = 13;
@@ -183,6 +185,18 @@ fn draw_confirm(frame: &mut Frame, app: &App) {
         "This cannot be undone.",
         Style::default().fg(Color::DarkGray),
     ));
+    let note =
+        matcher_for(pending.matcher_id).and_then(|matcher| match matcher.deletion_policy() {
+            DeletionPolicy::Confirm(note) => note,
+            _ => None,
+        });
+    let note_line = note.map(|text| {
+        Line::from(Span::styled(
+            text.to_string(),
+            Style::default().fg(Color::Yellow),
+        ))
+    });
+    let note_width = note_line.as_ref().map(|line| line.width()).unwrap_or(0);
 
     let title = Line::from(vec![Span::styled(
         " Confirm delete ",
@@ -201,6 +215,7 @@ fn draw_confirm(frame: &mut Frame, app: &App) {
         .into_iter()
         .max()
         .unwrap_or(0)
+        .max(note_width)
         .max(title.width() + 4)
         .max(actions.width() + 4)
         .min(max_inner);
@@ -213,11 +228,17 @@ fn draw_confirm(frame: &mut Frame, app: &App) {
         .into_iter()
         .max()
         .unwrap_or(0)
+        .max(note_width)
         .max(title.width() + 4)
         .max(actions.width() + 4)
         .min(max_inner);
 
-    let lines = vec![meta, path_line, prompt];
+    let mut lines = vec![meta, path_line];
+    if let Some(note_line) = note_line {
+        lines.push("".to_line());
+        lines.push(note_line);
+    }
+    lines.push(prompt);
     let dialog_width = dialog_width_for(content_width, frame_area.width);
     let dialog_height = (lines.len() as u16) + 4;
     let area = centered(frame_area, dialog_width, dialog_height);

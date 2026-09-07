@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeletionPolicy {
     Instant,
-    Confirm,
+    Confirm(Option<&'static str>),
 }
 
 pub trait Matcher: Send + Sync {
