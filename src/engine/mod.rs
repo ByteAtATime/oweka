@@ -169,14 +169,14 @@ fn is_still_claimed(artifact: &Artifact) -> bool {
         .path
         .symlink_metadata()
         .is_ok_and(|metadata| metadata.file_type().is_dir())
-        && claim(&artifact.path) == Some(artifact.matcher_id)
+        && claim(&artifact.path).is_some_and(|matcher| matcher.id() == artifact.matcher_id)
 }
 
 fn invoke_matcher_delete(artifact: &Artifact) -> DeleteOutcome {
     let Some(matcher) = matcher_for(artifact.matcher_id) else {
         return DeleteOutcome::NotFound;
     };
-    match matcher.delete(artifact) {
+    match matcher.delete(artifact.path()) {
         Ok(()) => DeleteOutcome::Deleted,
         Err(reason) => DeleteOutcome::IoFailed(reason),
     }
@@ -237,7 +237,7 @@ fn discover(root: &Path, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) {
         match item {
             WalkItem::WalkError { path, reason } => report_walk_error(&path, &reason, events),
             WalkItem::Dir(dir) => match claim(&dir) {
-                Some(id) => emit_artifact(&dir, id, jobs, events),
+                Some(matcher) => emit_artifact(&dir, matcher.id(), jobs, events),
                 None => {
                     if !is_git(&dir) {
                         frontier.expand(&dir);

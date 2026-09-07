@@ -10,9 +10,11 @@ pub enum DeletionPolicy {
 pub trait Matcher: Send + Sync {
     fn id(&self) -> &'static str;
     fn matches(&self, dir: &Path) -> bool;
-    fn deletion_policy(&self) -> DeletionPolicy;
-    fn delete(&self, artifact: &Artifact) -> io::Result<()> {
-        std::fs::remove_dir_all(artifact.path())
+    fn deletion_policy(&self) -> DeletionPolicy {
+        DeletionPolicy::Instant
+    }
+    fn delete(&self, path: &Path) -> io::Result<()> {
+        std::fs::remove_dir_all(path)
     }
 }
 

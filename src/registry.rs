@@ -12,10 +12,6 @@ impl Matcher for NodeModules {
     fn matches(&self, dir: &Path) -> bool {
         dir.file_name().is_some_and(|name| name == "node_modules")
     }
-
-    fn deletion_policy(&self) -> DeletionPolicy {
-        DeletionPolicy::Instant
-    }
 }
 
 pub struct Target;
@@ -31,10 +27,6 @@ impl Matcher for Target {
         }
         dir.parent()
             .is_some_and(|parent| parent.join("Cargo.toml").is_file())
-    }
-
-    fn deletion_policy(&self) -> DeletionPolicy {
-        DeletionPolicy::Instant
     }
 }
 
@@ -60,17 +52,13 @@ impl Matcher for Venv {
     }
 }
 
-static NODE_MODULES: NodeModules = NodeModules;
-static TARGET: Target = Target;
-static VENV: Venv = Venv;
+pub static REGISTRY: &[&dyn Matcher] = &[&NodeModules, &Target, &Venv];
 
-pub static REGISTRY: &[&dyn Matcher] = &[&NODE_MODULES, &TARGET, &VENV];
-
-pub fn claim(dir: &Path) -> Option<&'static str> {
+pub fn claim(dir: &Path) -> Option<&'static dyn Matcher> {
     REGISTRY
         .iter()
         .find(|matcher| matcher.matches(dir))
-        .map(|matcher| matcher.id())
+        .copied()
 }
 
 pub fn matcher_for(id: &str) -> Option<&'static dyn Matcher> {
@@ -87,8 +75,7 @@ mod tests {
         let venv = root.path().join(".venv");
         std::fs::create_dir(&venv).unwrap();
         std::fs::write(venv.join("pyvenv.cfg"), "").unwrap();
-        let id = claim(&venv).unwrap();
-        let matcher = matcher_for(id).unwrap();
+        let matcher = claim(&venv).unwrap();
         assert_eq!(
             matcher.deletion_policy(),
             DeletionPolicy::Confirm(Some("Ensure dependencies are exported to requirements.txt"))
