@@ -8,7 +8,7 @@ use std::thread;
 use std::time::SystemTime;
 
 use crate::matcher::Artifact;
-use crate::registry::claim;
+use crate::registry::{claim, matcher_for};
 use crate::walker::walk_dirs;
 
 #[derive(Debug)]
@@ -55,11 +55,17 @@ fn spawn_sizer(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while let Some(artifact) = next_job(&queue) {
-            let tally = measure(&artifact.path, &events);
+            let report = size_artifact(&artifact);
+            for error in &report.errors {
+                let _ = events.send(ScanEvent::WalkError {
+                    path: error.path.clone(),
+                    reason: error.reason.to_string(),
+                });
+            }
             let _ = events.send(ScanEvent::Sized {
                 artifact,
-                bytes: tally.bytes,
-                last_modified: tally.last_modified,
+                bytes: report.bytes,
+                last_modified: report.last_modified,
             });
         }
     })
@@ -69,28 +75,90 @@ fn next_job(queue: &Mutex<Receiver<Artifact>>) -> Option<Artifact> {
     queue.lock().unwrap().recv().ok()
 }
 
-#[derive(Default)]
-struct SizeTally {
-    bytes: u64,
-    last_modified: Option<SystemTime>,
+#[derive(Debug)]
+pub struct SizeError {
+    pub path: PathBuf,
+    pub reason: io::Error,
 }
 
-impl SizeTally {
+#[derive(Debug, Default)]
+pub struct SizeReport {
+    pub bytes: u64,
+    pub last_modified: Option<SystemTime>,
+    pub errors: Vec<SizeError>,
+}
+
+impl SizeReport {
     fn add_file(&mut self, metadata: &fs::Metadata) {
         self.bytes += metadata.len();
         self.last_modified = self.last_modified.max(metadata.modified().ok());
     }
+
+    fn record(&mut self, path: &Path, reason: io::Error) {
+        self.errors.push(SizeError {
+            path: path.to_path_buf(),
+            reason,
+        });
+    }
 }
 
-fn accumulate(
-    entry: &DirEntry,
-    tally: &mut SizeTally,
-    pending: &mut Vec<PathBuf>,
-    events: &Sender<ScanEvent>,
-) {
+#[derive(Debug)]
+pub enum DeleteOutcome {
+    Deleted,
+    NotFound,
+    IoFailed(io::Error),
+}
+
+pub fn size_artifact(artifact: &Artifact) -> SizeReport {
+    let mut report = SizeReport::default();
+    let mut pending = vec![artifact.path.clone()];
+    while let Some(directory) = pending.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(reason) => {
+                report.record(&directory, reason);
+                continue;
+            }
+        };
+        for entry in entries {
+            match entry {
+                Ok(entry) => accumulate(&entry, &mut report, &mut pending),
+                Err(reason) => report.record(&directory, reason),
+            }
+        }
+    }
+    report
+}
+
+pub fn delete_artifact(artifact: &Artifact) -> DeleteOutcome {
+    if !is_still_claimed(artifact) {
+        return DeleteOutcome::NotFound;
+    }
+    invoke_matcher_delete(artifact)
+}
+
+fn is_still_claimed(artifact: &Artifact) -> bool {
+    artifact
+        .path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_dir())
+        && claim(&artifact.path) == Some(artifact.matcher_id)
+}
+
+fn invoke_matcher_delete(artifact: &Artifact) -> DeleteOutcome {
+    let Some(matcher) = matcher_for(artifact.matcher_id) else {
+        return DeleteOutcome::NotFound;
+    };
+    match matcher.delete(artifact) {
+        Ok(()) => DeleteOutcome::Deleted,
+        Err(reason) => DeleteOutcome::IoFailed(reason),
+    }
+}
+
+fn accumulate(entry: &DirEntry, report: &mut SizeReport, pending: &mut Vec<PathBuf>) {
     let file_type = match entry.file_type() {
         Ok(file_type) => file_type,
-        Err(reason) => return report_walk_error(&entry.path(), &reason, events),
+        Err(reason) => return report.record(&entry.path(), reason),
     };
     if file_type.is_symlink() {
         return;
@@ -100,30 +168,9 @@ fn accumulate(
         return;
     }
     match entry.metadata() {
-        Ok(metadata) => tally.add_file(&metadata),
-        Err(reason) => report_walk_error(&entry.path(), &reason, events),
+        Ok(metadata) => report.add_file(&metadata),
+        Err(reason) => report.record(&entry.path(), reason),
     }
-}
-
-fn measure(artifact: &Path, events: &Sender<ScanEvent>) -> SizeTally {
-    let mut tally = SizeTally::default();
-    let mut pending = vec![artifact.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        let entries = match fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(reason) => {
-                report_walk_error(&directory, &reason, events);
-                continue;
-            }
-        };
-        for entry in entries {
-            match entry {
-                Ok(entry) => accumulate(&entry, &mut tally, &mut pending, events),
-                Err(reason) => report_walk_error(&directory, &reason, events),
-            }
-        }
-    }
-    tally
 }
 
 fn worker_count() -> NonZeroUsize {

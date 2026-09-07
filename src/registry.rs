@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::matcher::Matcher;
+use crate::matcher::{DeletionPolicy, Matcher};
 
 pub struct NodeModules;
 
@@ -11,6 +11,10 @@ impl Matcher for NodeModules {
 
     fn matches(&self, dir: &Path) -> bool {
         dir.file_name().is_some_and(|name| name == "node_modules")
+    }
+
+    fn deletion_policy(&self) -> DeletionPolicy {
+        DeletionPolicy::Instant
     }
 }
 
@@ -28,6 +32,10 @@ impl Matcher for Target {
         dir.parent()
             .is_some_and(|parent| parent.join("Cargo.toml").is_file())
     }
+
+    fn deletion_policy(&self) -> DeletionPolicy {
+        DeletionPolicy::Instant
+    }
 }
 
 static NODE_MODULES: NodeModules = NodeModules;
@@ -40,4 +48,11 @@ pub fn claim(dir: &Path) -> Option<&'static str> {
         .iter()
         .find(|matcher| matcher.matches(dir))
         .map(|matcher| matcher.id())
+}
+
+pub fn matcher_for(id: &str) -> Option<&'static dyn Matcher> {
+    REGISTRY
+        .iter()
+        .find(|matcher| matcher.id() == id)
+        .copied()
 }
