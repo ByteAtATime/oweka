@@ -13,6 +13,17 @@ fn main() {
             ScanEvent::Found { artifact } => {
                 println!("found {} {}", artifact.matcher_id, artifact.path.display())
             }
+            ScanEvent::Sized {
+                artifact,
+                bytes,
+                last_modified,
+            } => {
+                println!(
+                    "sized {} {bytes} {:?}",
+                    artifact.path.display(),
+                    last_modified
+                )
+            }
             ScanEvent::WalkError { path, reason } => {
                 println!("error {} {reason}", path.display())
             }
