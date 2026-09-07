@@ -60,6 +60,14 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let now = SystemTime::now();
     let path_width = path_column_width(area);
+    let visible_rows = area.height.saturating_sub(1) as usize;
+    let len = app.rows().len();
+    let selection = app.selected_index();
+    let start = scrolled_start(app, len, selection, visible_rows);
+    app.set_scroll(start);
+    let end = (start + visible_rows).min(len);
+    app.set_render_selection(selection.map(|selected| selected - start));
+    let window = &app.rows()[start..end];
     let header = TableRow::new([
         Cell::from("path"),
         Cell::from("matcher"),
@@ -67,8 +75,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
         Cell::from(Line::from("size").alignment(Alignment::Right)),
     ])
     .style(Style::default().add_modifier(Modifier::DIM));
-    let body: Vec<TableRow> = app
-        .rows()
+    let body: Vec<TableRow> = window
         .iter()
         .map(|row| {
             let path = truncate_left(&display_path(app.root(), &row.artifact.path), path_width);
@@ -103,6 +110,21 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         );
     frame.render_stateful_widget(table, area, app.table_state_mut());
+    app.set_render_selection(selection);
+}
+
+fn scrolled_start(app: &App, len: usize, selection: Option<usize>, visible_rows: usize) -> usize {
+    let mut start = app.scroll().min(len - 1);
+    let Some(selected) = selection else {
+        return start;
+    };
+    if selected < start {
+        return selected;
+    }
+    if selected >= start + visible_rows.max(1) {
+        start = selected + 1 - visible_rows.max(1);
+    }
+    start
 }
 
 fn path_column_width(area: Rect) -> usize {

@@ -34,6 +34,7 @@ pub struct App {
     done: bool,
     started: Instant,
     finished: Option<Instant>,
+    scroll: usize,
     table_state: TableState,
 }
 
@@ -47,6 +48,7 @@ impl App {
             done: false,
             started: Instant::now(),
             finished: None,
+            scroll: 0,
             table_state: TableState::new(),
         }
     }
@@ -110,6 +112,18 @@ impl App {
 
     pub(super) fn table_state_mut(&mut self) -> &mut TableState {
         &mut self.table_state
+    }
+
+    pub(super) fn scroll(&self) -> usize {
+        self.scroll
+    }
+
+    pub(super) fn set_scroll(&mut self, scroll: usize) {
+        self.scroll = scroll;
+    }
+
+    pub(super) fn set_render_selection(&mut self, selected: Option<usize>) {
+        self.table_state.select(selected);
     }
 
     pub(super) fn total_bytes(&self) -> u64 {
