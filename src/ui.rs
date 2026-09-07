@@ -168,6 +168,14 @@ fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
             app.move_cursor(-1);
             false
         }
+        KeyCode::PageUp => {
+            app.page_up();
+            false
+        }
+        KeyCode::PageDown => {
+            app.page_down();
+            false
+        }
         KeyCode::Enter | KeyCode::Char(' ') => {
             request_deletion(app, sender.clone());
             false

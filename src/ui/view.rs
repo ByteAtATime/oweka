@@ -125,6 +125,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     let now = SystemTime::now();
     let path_width = path_column_width(area);
     let visible_rows = area.height.saturating_sub(1) as usize;
+    app.set_page_size(visible_rows);
     let len = app.rows().len();
     let selection = app.selected_index();
     let start = scrolled_start(app, len, selection, visible_rows);

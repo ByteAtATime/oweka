@@ -39,6 +39,7 @@ pub struct App {
     started: Instant,
     finished: Option<Instant>,
     scroll: usize,
+    page_size: usize,
     table_state: TableState,
     pending: Option<Artifact>,
 }
@@ -55,6 +56,7 @@ impl App {
             started: Instant::now(),
             finished: None,
             scroll: 0,
+            page_size: 0,
             table_state: TableState::new(),
             pending: None,
         }
@@ -83,6 +85,14 @@ impl App {
         let current = self.table_state.selected().unwrap_or(0);
         let next = (current as i32 + delta).clamp(0, self.rows.len() as i32 - 1) as usize;
         self.table_state.select(Some(next));
+    }
+
+    pub fn page_up(&mut self) {
+        self.move_cursor(-(page_step(self.page_size) as i32));
+    }
+
+    pub fn page_down(&mut self) {
+        self.move_cursor(page_step(self.page_size) as i32);
     }
 
     pub fn selected_index(&self) -> Option<usize> {
@@ -180,6 +190,10 @@ impl App {
 
     pub(super) fn set_scroll(&mut self, scroll: usize) {
         self.scroll = scroll;
+    }
+
+    pub(super) fn set_page_size(&mut self, page_size: usize) {
+        self.page_size = page_size;
     }
 
     pub(super) fn set_render_selection(&mut self, selected: Option<usize>) {
@@ -283,6 +297,10 @@ impl App {
         self.done = true;
         self.finished = Some(Instant::now());
     }
+}
+
+fn page_step(page_size: usize) -> usize {
+    page_size.saturating_sub(1).max(1)
 }
 
 fn sorts_before(candidate: &Row, bytes: u64, path: &Path) -> bool {
