@@ -77,6 +77,38 @@ fn unreadable_artifact_lists_zero_with_error() {
 }
 
 #[test]
+fn artifact_root_is_never_descended() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("node_modules");
+    common::write_bytes(&root.join("a.js"), 10);
+    common::write_bytes(&root.join("nested/node_modules/inner.js"), 5);
+    let events = common::drain(scan(&root));
+    assert_eq!(common::found_paths(&events), vec![root.clone()]);
+    assert!(common::ends_with_done(&events));
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_dir_error_names_that_dir_and_siblings_still_found() {
+    let root = tempfile::tempdir().unwrap();
+    let locked = root.path().join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    common::write_bytes(&root.path().join("proj/node_modules/a.js"), 10);
+    lock(&locked);
+    let events = common::drain(scan(root.path()));
+    unlock(&locked);
+    assert!(walk_errors(&events).iter().any(|event| match event {
+        ScanEvent::WalkError { path, .. } => path == &locked,
+        _ => false,
+    }));
+    assert_eq!(
+        common::found_paths(&events),
+        vec![root.path().join("proj/node_modules")]
+    );
+    assert!(common::ends_with_done(&events));
+}
+
+#[test]
 fn missing_root_exits_one() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_oweka"))
         .arg("/nonexistent-oweka-root-xyz")

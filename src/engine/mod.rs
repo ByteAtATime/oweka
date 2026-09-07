@@ -1,3 +1,5 @@
+mod frontier;
+
 use std::fs::{self, DirEntry};
 use std::io;
 use std::num::NonZeroUsize;
@@ -7,9 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
 
+use frontier::{Frontier, WalkItem};
+
 use crate::matcher::Artifact;
 use crate::registry::{claim, matcher_for};
-use crate::walker::walk_dirs;
 
 #[derive(Debug)]
 pub enum ScanEvent {
@@ -181,14 +184,6 @@ fn is_git(path: &Path) -> bool {
     path.file_name().is_some_and(|name| name == ".git")
 }
 
-fn visit_candidate(candidate: &Path, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) -> bool {
-    if let Some(matcher_id) = claim(candidate) {
-        emit_artifact(candidate, matcher_id, jobs, events);
-        return false;
-    }
-    !is_git(candidate)
-}
-
 fn emit_artifact(
     path: &Path,
     matcher_id: &'static str,
@@ -213,13 +208,18 @@ fn report_walk_error(path: &Path, reason: &io::Error, events: &Sender<ScanEvent>
 }
 
 fn discover(root: &Path, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) {
-    if !visit_candidate(root, jobs, events) {
-        return;
+    let frontier = Frontier::new(root.to_path_buf());
+    while let Some(item) = frontier.next() {
+        match item {
+            WalkItem::WalkError { path, reason } => report_walk_error(&path, &reason, events),
+            WalkItem::Dir(dir) => match claim(&dir) {
+                Some(id) => emit_artifact(&dir, id, jobs, events),
+                None => {
+                    if !is_git(&dir) {
+                        frontier.expand(&dir);
+                    }
+                }
+            },
+        }
     }
-    walk_dirs(
-        root,
-        worker_count(),
-        &|candidate| visit_candidate(candidate, jobs, events),
-        &|path, reason| report_walk_error(path, reason, events),
-    );
 }
