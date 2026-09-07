@@ -1,20 +1,22 @@
-use std::io;
+use std::env;
+use std::path::PathBuf;
 
-use ratatui::{DefaultTerminal, Frame};
+use oweka::engine::{self, ScanEvent};
 
-fn main() -> io::Result<()> {
-    ratatui::run(app)
-}
-
-fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
-    loop {
-        terminal.draw(render)?;
-        if crossterm::event::read()?.is_key_press() {
-            break Ok(());
+fn main() {
+    let root = env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::current_dir().expect("working directory is readable"));
+    for event in engine::scan(&root) {
+        match event {
+            ScanEvent::Found { artifact } => {
+                println!("found {} {}", artifact.matcher_id, artifact.path.display())
+            }
+            ScanEvent::WalkError { path, reason } => {
+                println!("error {} {reason}", path.display())
+            }
+            ScanEvent::Done => println!("done"),
         }
     }
-}
-
-fn render(frame: &mut Frame) {
-    frame.render_widget("hello world", frame.area());
 }

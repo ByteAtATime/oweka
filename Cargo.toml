@@ -5,4 +5,8 @@ edition = "2024"
 
 [dependencies]
 crossterm = "0.29.0"
+dua-core = "3.3.1"
 ratatui = "0.30.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"
