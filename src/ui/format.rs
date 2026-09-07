@@ -75,14 +75,13 @@ fn format_age(age: Duration) -> String {
 }
 
 pub(super) fn display_path(path: &Path) -> String {
-    if let Ok(home) = std::env::var("HOME") {
-        let home_path = Path::new(&home);
-        if let Ok(stripped) = path.strip_prefix(home_path) {
-            if stripped.as_os_str().is_empty() {
-                return String::from("~");
-            }
-            return Path::new("~").join(stripped).display().to_string();
+    if let Some(home_path) = dirs::home_dir()
+        && let Ok(stripped) = path.strip_prefix(&home_path)
+    {
+        if stripped.as_os_str().is_empty() {
+            return String::from("~");
         }
+        return Path::new("~").join(stripped).display().to_string();
     }
 
     path.display().to_string()

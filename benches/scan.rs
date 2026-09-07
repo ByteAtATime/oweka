@@ -9,7 +9,7 @@ fn bench_root() -> PathBuf {
     std::env::var("OWEKA_BENCH_ROOT")
         .map(PathBuf::from)
         .ok()
-        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+        .or_else(dirs::home_dir)
         .expect("OWEKA_BENCH_ROOT or HOME must be set")
 }
 

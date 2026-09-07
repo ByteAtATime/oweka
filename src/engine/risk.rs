@@ -10,15 +10,11 @@ pub fn analyze(path: &Path) -> Option<&'static str> {
 }
 
 fn home_string() -> Option<String> {
-    let raw = std::env::var("HOME")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("USERPROFILE")
-                .ok()
-                .filter(|value| !value.is_empty())
-        });
-    raw.map(|value| value.replace('\\', "/"))
+    let value = dirs::home_dir().map(|home| home.to_string_lossy().replace('\\', "/"))?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(value)
 }
 
 fn sensitive(original: &str, home: Option<&str>, cwd: Option<&str>) -> Option<&'static str> {
