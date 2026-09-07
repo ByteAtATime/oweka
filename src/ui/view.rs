@@ -351,7 +351,8 @@ fn draw_status(frame: &mut Frame, view: &ViewState, area: Rect) {
     let first = Line::from(Span::raw(format!(
         "Potential Space {} · Freed Space {} · errors {}",
         view.potential, view.freed, view.error_count
-    )));
+    )))
+    .dim();
     frame.render_widget(Paragraph::new(first), area);
 }
 
