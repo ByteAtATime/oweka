@@ -176,6 +176,10 @@ fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
             app.page_down();
             false
         }
+        KeyCode::Char('o') => {
+            open_parent(app);
+            false
+        }
         KeyCode::Enter | KeyCode::Char(' ') => {
             request_deletion(app, sender.clone());
             false
@@ -198,6 +202,32 @@ fn request_deletion(app: &mut App, sender: Sender<UiEvent>) {
         }
         None => {}
     }
+}
+
+fn open_parent(app: &App) {
+    let Some(artifact) = app.selected_artifact() else {
+        return;
+    };
+    let Some(parent) = artifact.path.parent() else {
+        return;
+    };
+    open_in_file_manager(parent);
+}
+
+fn open_in_file_manager(path: &Path) {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(program)
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 fn confirm_deletion(app: &mut App, sender: Sender<UiEvent>) {

@@ -99,6 +99,12 @@ impl App {
         self.table_state.selected()
     }
 
+    pub fn selected_artifact(&self) -> Option<Artifact> {
+        let selected = self.table_state.selected()?;
+        let row = self.rows.get(selected)?;
+        Some(row.artifact.clone())
+    }
+
     pub fn deletion_target(&self) -> Option<Artifact> {
         let selected = self.table_state.selected()?;
         let row = self.rows.get(selected)?;

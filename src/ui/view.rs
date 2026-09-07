@@ -82,6 +82,7 @@ fn header_hint(app: &App) -> Line<'static> {
         hint_line(&[
             ("j/k/arrows", "move"),
             ("enter/space", "delete"),
+            ("o", "open"),
             ("q", "quit"),
         ])
     }
