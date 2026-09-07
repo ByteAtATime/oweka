@@ -11,6 +11,7 @@ fn node_modules_artifact(root: &std::path::Path) -> Artifact {
     Artifact {
         matcher_id: "node_modules",
         path: root.join("node_modules"),
+        risk: None,
     }
 }
 
@@ -55,6 +56,7 @@ fn delete_under_read_only_parent_reports_io_failure() {
     let artifact = Artifact {
         matcher_id: "node_modules",
         path: parent.join("node_modules"),
+        risk: None,
     };
     let result = delete_artifact(&artifact);
     match result.outcome {
@@ -79,6 +81,7 @@ fn delete_works_when_artifact_is_scan_root() {
     let artifact = Artifact {
         matcher_id: "node_modules",
         path: root.clone(),
+        risk: None,
     };
     let result = delete_artifact(&artifact);
     match result.outcome {

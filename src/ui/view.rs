@@ -137,7 +137,16 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
         .iter()
         .map(|row| {
             let path = truncate_left(&display_path(&row.path), path_width);
-            let modified = relative_age(row.last_modified, wall);
+            let path_cell = if row.risk.is_some() {
+                Cell::from(Span::styled(path, Style::default().fg(Color::Yellow)))
+            } else {
+                Cell::from(path)
+            };
+            let modified = if row.risk.is_some() {
+                String::new()
+            } else {
+                relative_age(row.last_modified, wall)
+            };
             let modified_style = age_style(row.last_modified, wall);
             let size = row_size_text(row);
             let modified_cell = if row.failed {
@@ -146,7 +155,7 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
                 Cell::from(Span::styled(modified, modified_style))
             };
             let cells = TableRow::new([
-                Cell::from(path),
+                path_cell,
                 Cell::from(row.matcher_id),
                 modified_cell,
                 Cell::from(Line::from(size).alignment(Alignment::Right)),

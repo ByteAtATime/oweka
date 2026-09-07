@@ -38,6 +38,7 @@ fn hash_path(path: &Path) -> u64 {
 pub struct RowView {
     pub path: PathBuf,
     pub matcher_id: &'static str,
+    pub risk: Option<&'static str>,
     pub bytes: Option<u64>,
     pub last_modified: Option<SystemTime>,
     pub deleting: bool,
@@ -208,6 +209,7 @@ impl App {
             .map(|row| RowView {
                 path: row.artifact.path.clone(),
                 matcher_id: row.artifact.matcher_id,
+                risk: row.artifact.risk,
                 bytes: row.bytes,
                 last_modified: row.last_modified,
                 deleting: row.deleting,
@@ -378,6 +380,7 @@ mod tests {
         Artifact {
             matcher_id,
             path: PathBuf::from(name),
+            risk: None,
         }
     }
 

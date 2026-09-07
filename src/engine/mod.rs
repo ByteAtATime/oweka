@@ -1,4 +1,5 @@
 mod frontier;
+mod risk;
 
 use std::fs::{self, DirEntry};
 use std::io;
@@ -217,6 +218,7 @@ fn emit_artifact(
     let artifact = Artifact {
         matcher_id,
         path: path.to_path_buf(),
+        risk: risk::analyze(path),
     };
     let _ = events.send(ScanEvent::Found {
         artifact: artifact.clone(),

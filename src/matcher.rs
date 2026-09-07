@@ -22,6 +22,7 @@ pub trait Matcher: Send + Sync {
 pub struct Artifact {
     pub matcher_id: &'static str,
     pub path: PathBuf,
+    pub risk: Option<&'static str>,
 }
 
 impl Artifact {
