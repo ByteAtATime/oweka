@@ -6,6 +6,7 @@ use std::time::{Instant, SystemTime};
 use ratatui::widgets::TableState;
 
 use crate::engine::ScanEvent;
+use crate::engine::{DeleteOutcome, SizeReport};
 use crate::matcher::Artifact;
 
 struct ScanError {
@@ -13,11 +14,19 @@ struct ScanError {
     reason: String,
 }
 
+pub struct DeleteResult {
+    pub artifact: Artifact,
+    pub outcome: DeleteOutcome,
+    pub rescan: Option<SizeReport>,
+}
+
 pub(super) struct Row {
     pub(super) artifact: Artifact,
     path_hash: u64,
     pub(super) bytes: Option<u64>,
     pub(super) last_modified: Option<SystemTime>,
+    pub(super) deleting: bool,
+    pub(super) failed: bool,
 }
 
 fn hash_path(path: &Path) -> u64 {
@@ -31,6 +40,7 @@ pub struct App {
     rows: Vec<Row>,
     seen: HashSet<PathBuf>,
     errors: Vec<ScanError>,
+    freed_bytes: u64,
     done: bool,
     started: Instant,
     finished: Option<Instant>,
@@ -45,6 +55,7 @@ impl App {
             rows: Vec::new(),
             seen: HashSet::new(),
             errors: Vec::new(),
+            freed_bytes: 0,
             done: false,
             started: Instant::now(),
             finished: None,
@@ -80,6 +91,33 @@ impl App {
 
     pub fn selected_index(&self) -> Option<usize> {
         self.table_state.selected()
+    }
+
+    pub fn deletion_target(&self) -> Option<Artifact> {
+        let selected = self.table_state.selected()?;
+        let row = self.rows.get(selected)?;
+        if row.deleting {
+            return None;
+        }
+        Some(row.artifact.clone())
+    }
+
+    pub fn mark_deleting(&mut self, artifact: &Artifact) {
+        if let Some(row) = find_row_mut(&mut self.rows, artifact) {
+            row.deleting = true;
+        }
+    }
+
+    pub fn apply_delete_result(&mut self, result: DeleteResult) {
+        match result.outcome {
+            DeleteOutcome::Deleted => self.remove_deleted(&result.artifact),
+            DeleteOutcome::NotFound => {
+                self.fail_row(&result.artifact, "no longer recognized", result.rescan);
+            }
+            DeleteOutcome::IoFailed(reason) => {
+                self.fail_row(&result.artifact, &reason.to_string(), result.rescan);
+            }
+        }
     }
 
     pub(super) fn root(&self) -> &Path {
@@ -130,6 +168,10 @@ impl App {
         self.rows.iter().filter_map(|row| row.bytes).sum()
     }
 
+    pub(super) fn freed_bytes(&self) -> u64 {
+        self.freed_bytes
+    }
+
     fn insert_row(&mut self, artifact: Artifact) {
         if !self.seen.insert(artifact.path.clone()) {
             return;
@@ -142,6 +184,8 @@ impl App {
             artifact,
             bytes: None,
             last_modified: None,
+            deleting: false,
+            failed: false,
         });
     }
 
@@ -157,9 +201,59 @@ impl App {
         let mut row = self.rows.remove(index);
         row.bytes = Some(bytes);
         row.last_modified = last_modified;
-        let position = self
-            .rows
-            .partition_point(|candidate| sorts_before(candidate, bytes, &row.artifact.path));
+        self.insert_sorted(row);
+    }
+
+    fn remove_deleted(&mut self, artifact: &Artifact) {
+        let Some(index) = self.rows.iter().position(|row| row_matches(row, artifact)) else {
+            return;
+        };
+        let selected = self.table_state.selected();
+        self.freed_bytes += self.rows[index].bytes.unwrap_or(0);
+        self.rows.remove(index);
+        if self.rows.is_empty() {
+            self.table_state.select(None);
+            return;
+        }
+        if let Some(selected) = selected {
+            self.table_state
+                .select(Some(shift_after_removal(selected, index, self.rows.len())));
+        }
+    }
+
+    fn fail_row(&mut self, artifact: &Artifact, reason: &str, rescan: Option<SizeReport>) {
+        self.errors.push(ScanError {
+            path: artifact.path.clone(),
+            reason: reason.to_string(),
+        });
+        let Some(index) = self.rows.iter().position(|row| row_matches(row, artifact)) else {
+            return;
+        };
+        let mut row = self.rows.remove(index);
+        row.deleting = false;
+        row.failed = true;
+        if let Some(report) = rescan {
+            row.bytes = Some(report.bytes);
+            row.last_modified = report.last_modified;
+            for error in report.errors {
+                self.errors.push(ScanError {
+                    path: error.path,
+                    reason: error.reason.to_string(),
+                });
+            }
+        }
+        self.insert_sorted(row);
+        let settled = self.rows.iter().position(|row| row_matches(row, artifact));
+        self.table_state.select(settled);
+    }
+
+    fn insert_sorted(&mut self, row: Row) {
+        let position = match row.bytes {
+            None => self.rows.len(),
+            Some(bytes) => self
+                .rows
+                .partition_point(|candidate| sorts_before(candidate, bytes, &row.artifact.path)),
+        };
         self.rows.insert(position, row);
     }
 
@@ -176,6 +270,21 @@ fn sorts_before(candidate: &Row, bytes: u64, path: &Path) -> bool {
             existing > bytes || (existing == bytes && candidate.artifact.path.as_path() < path)
         }
     }
+}
+
+fn row_matches(row: &Row, artifact: &Artifact) -> bool {
+    row.path_hash == hash_path(&artifact.path) && row.artifact.path == artifact.path
+}
+
+fn find_row_mut<'rows>(rows: &'rows mut [Row], artifact: &Artifact) -> Option<&'rows mut Row> {
+    rows.iter_mut().find(|row| row_matches(row, artifact))
+}
+
+fn shift_after_removal(selected: usize, removed: usize, remaining: usize) -> usize {
+    if selected > removed {
+        return selected - 1;
+    }
+    selected.min(remaining - 1)
 }
 
 #[cfg(test)]

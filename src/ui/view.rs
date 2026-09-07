@@ -51,8 +51,9 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.is_empty() {
+        let message = empty_message(app);
         let hint = Paragraph::new(Line::from(Span::styled(
-            "waiting for artifacts…",
+            message,
             Style::default().add_modifier(Modifier::DIM),
         )));
         frame.render_widget(hint, area);
@@ -80,16 +81,18 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|row| {
             let path = truncate_left(&display_path(app.root(), &row.artifact.path), path_width);
             let modified = relative_age(row.last_modified, now);
-            let size = row
-                .bytes
-                .map(format_size)
-                .unwrap_or_else(|| PENDING.to_string());
-            TableRow::new([
+            let size = row_size_text(row);
+            let cells = TableRow::new([
                 Cell::from(path),
                 Cell::from(row.artifact.matcher_id),
                 Cell::from(modified),
                 Cell::from(Line::from(size).alignment(Alignment::Right)),
-            ])
+            ]);
+            if row.failed {
+                cells.style(Style::default().fg(Color::Red))
+            } else {
+                cells
+            }
         })
         .collect();
     let widths = [
@@ -150,10 +153,29 @@ fn scan_status(app: &App) -> String {
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
-    let total = format_size(app.total_bytes());
+    let potential = format_size(app.total_bytes());
+    let freed = format_size(app.freed_bytes());
     let first = Line::from(Span::raw(format!(
-        "total {total} · errors {}",
+        "Potential Space {potential} · Freed Space {freed} · errors {}",
         app.error_count()
     )));
     frame.render_widget(Paragraph::new(first), area);
+}
+
+fn empty_message(app: &App) -> &'static str {
+    if app.is_done() {
+        "no artifacts found"
+    } else {
+        "waiting for artifacts…"
+    }
+}
+
+fn row_size_text(row: &super::app::Row) -> String {
+    if row.deleting {
+        String::from("deleting…")
+    } else {
+        row.bytes
+            .map(format_size)
+            .unwrap_or_else(|| PENDING.to_string())
+    }
 }

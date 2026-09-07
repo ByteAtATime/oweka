@@ -16,9 +16,9 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use crate::engine::ScanEvent;
+use crate::engine::{DeleteOutcome, ScanEvent, delete_artifact, size_artifact};
 
-use app::App;
+use app::{App, DeleteResult};
 
 const TICK: Duration = Duration::from_millis(100);
 
@@ -26,6 +26,7 @@ pub enum UiEvent {
     Tick,
     Key(KeyEvent),
     Scan(ScanEvent),
+    Deleted(DeleteResult),
 }
 
 pub fn run(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<()> {
@@ -63,16 +64,16 @@ fn run_loop(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<()> {
     let mut app = App::new(root.to_path_buf());
     let (ui_sender, ui_events) = mpsc::channel();
     spawn_event_thread(ui_sender.clone());
-    spawn_scan_bridge(scan_events, ui_sender);
+    spawn_scan_bridge(scan_events, ui_sender.clone());
     loop {
         terminal.draw(|frame| view::draw(frame, &mut app))?;
         match next_ui_event(&ui_events, &mut app)? {
             UiEvent::Key(key) => {
-                if handle_key(&mut app, key) {
+                if handle_key(&mut app, key, &ui_sender) {
                     return Ok(());
                 }
             }
-            UiEvent::Tick | UiEvent::Scan(_) => {}
+            UiEvent::Tick | UiEvent::Scan(_) | UiEvent::Deleted(_) => {}
         }
     }
 }
@@ -84,16 +85,25 @@ fn next_ui_event(ui_events: &Receiver<UiEvent>, app: &mut App) -> io::Result<UiE
     {
         UiEvent::Scan(event) => {
             app.apply(event);
-            while let Ok(follow_up) = ui_events.try_recv() {
-                match follow_up {
-                    UiEvent::Scan(event) => app.apply(event),
-                    other => return Ok(other),
-                }
-            }
-            Ok(UiEvent::Tick)
+            drain_ready(ui_events, app)
+        }
+        UiEvent::Deleted(result) => {
+            app.apply_delete_result(result);
+            drain_ready(ui_events, app)
         }
         other => Ok(other),
     }
+}
+
+fn drain_ready(ui_events: &Receiver<UiEvent>, app: &mut App) -> io::Result<UiEvent> {
+    while let Ok(follow_up) = ui_events.try_recv() {
+        match follow_up {
+            UiEvent::Scan(event) => app.apply(event),
+            UiEvent::Deleted(result) => app.apply_delete_result(result),
+            other => return Ok(other),
+        }
+    }
+    Ok(UiEvent::Tick)
 }
 
 fn spawn_event_thread(sender: Sender<UiEvent>) {
@@ -128,7 +138,7 @@ fn spawn_scan_bridge(scan_events: Receiver<ScanEvent>, sender: Sender<UiEvent>) 
     });
 }
 
-fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
     let code = key.code;
     let modifiers = key.modifiers;
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
@@ -144,6 +154,29 @@ fn handle_key(app: &mut App, key: KeyEvent) -> bool {
             app.move_cursor(-1);
             false
         }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            spawn_deletion(app, sender.clone());
+            false
+        }
         _ => false,
     }
+}
+
+fn spawn_deletion(app: &mut App, sender: Sender<UiEvent>) {
+    let Some(artifact) = app.deletion_target() else {
+        return;
+    };
+    app.mark_deleting(&artifact);
+    thread::spawn(move || {
+        let outcome = delete_artifact(&artifact);
+        let rescan = match &outcome {
+            DeleteOutcome::Deleted => None,
+            _ => Some(size_artifact(&artifact)),
+        };
+        let _ = sender.send(UiEvent::Deleted(DeleteResult {
+            artifact,
+            outcome,
+            rescan,
+        }));
+    });
 }
