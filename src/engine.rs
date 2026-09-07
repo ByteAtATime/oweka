@@ -53,7 +53,10 @@ fn spawn_sizer(
     events: Sender<ScanEvent>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        while let Ok(artifact) = queue.lock().unwrap().recv() {
+        while let Ok(artifact) = {
+            let queue = queue.lock().unwrap();
+            queue.recv()
+        } {
             let tally = measure(&artifact.path, &events);
             let _ = events.send(ScanEvent::Sized {
                 artifact,
