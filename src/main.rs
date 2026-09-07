@@ -1,7 +1,8 @@
 use std::env;
 use std::path::PathBuf;
 
-use oweka::engine::{self, ScanEvent};
+use oweka::engine;
+use oweka::ui;
 
 fn main() {
     let root = env::args()
@@ -12,26 +13,9 @@ fn main() {
         eprintln!("{} does not exist or is not a directory", root.display());
         std::process::exit(1);
     }
-    for event in engine::scan(&root) {
-        match event {
-            ScanEvent::Found { artifact } => {
-                println!("found {} {}", artifact.matcher_id, artifact.path.display())
-            }
-            ScanEvent::Sized {
-                artifact,
-                bytes,
-                last_modified,
-            } => {
-                println!(
-                    "sized {} {bytes} {:?}",
-                    artifact.path.display(),
-                    last_modified
-                )
-            }
-            ScanEvent::WalkError { path, reason } => {
-                println!("error {} {reason}", path.display())
-            }
-            ScanEvent::Done => println!("done"),
-        }
+    let events = engine::scan(&root);
+    if let Err(reason) = ui::run(&root, events) {
+        eprintln!("terminal error: {reason}");
+        std::process::exit(1);
     }
 }

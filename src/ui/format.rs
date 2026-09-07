@@ -1,0 +1,99 @@
+use std::path::Path;
+use std::time::{Duration, SystemTime};
+
+pub(super) const PENDING: &str = "...";
+
+pub(super) fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let units = ["KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = units[0];
+    for next in units.iter().skip(1) {
+        if value < 1024.0 {
+            break;
+        }
+        value /= 1024.0;
+        unit = next;
+    }
+    format!("{} {unit}", trim_float(value))
+}
+
+fn trim_float(value: f64) -> String {
+    let rounded = (value * 10.0).round() / 10.0;
+    if rounded.fract() == 0.0 {
+        return format!("{}", rounded as u64);
+    }
+    format!("{rounded:.1}")
+}
+
+pub(super) fn relative_age(modified: Option<SystemTime>, now: SystemTime) -> String {
+    let Some(instant) = modified else {
+        return PENDING.to_string();
+    };
+    let age = now.duration_since(instant).unwrap_or(Duration::ZERO);
+    format_age(age)
+}
+
+fn format_age(age: Duration) -> String {
+    let seconds = age.as_secs();
+    if seconds < 60 {
+        return format!("{seconds}s ago");
+    }
+    if seconds < 3600 {
+        return format!("{}m ago", seconds / 60);
+    }
+    if seconds < 86400 {
+        return format!("{}h ago", seconds / 3600);
+    }
+    if seconds < 86400 * 30 {
+        return format!("{}d ago", seconds / 86400);
+    }
+    if seconds < 86400 * 365 {
+        return format!("{}mo ago", seconds / (86400 * 30));
+    }
+    format!("{}y ago", seconds / (86400 * 365))
+}
+
+pub(super) fn display_path(root: &Path, path: &Path) -> String {
+    let stripped = path.strip_prefix(root).unwrap_or(path);
+    if stripped.as_os_str().is_empty() {
+        return String::from(".");
+    }
+    stripped.display().to_string()
+}
+
+pub(super) fn truncate_left(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    if width == 1 {
+        return String::from("…");
+    }
+    let tail: String = text.chars().rev().take(width - 1).collect();
+    format!("…{}", tail.chars().rev().collect::<String>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncates_ascii_with_ellipsis() {
+        assert_eq!(truncate_left("abcdef", 4), "…def");
+    }
+
+    #[test]
+    fn truncates_multibyte_without_panicking() {
+        assert_eq!(truncate_left("日本語テスト", 3), "…スト");
+    }
+
+    #[test]
+    fn passes_short_input_through() {
+        assert_eq!(truncate_left("hi", 4), "hi");
+    }
+}
