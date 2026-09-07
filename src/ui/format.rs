@@ -17,15 +17,7 @@ pub(super) fn format_size(bytes: u64) -> String {
         value /= 1024.0;
         unit = next;
     }
-    format!("{} {unit}", trim_float(value))
-}
-
-fn trim_float(value: f64) -> String {
-    let rounded = (value * 10.0).round() / 10.0;
-    if rounded.fract() == 0.0 {
-        return format!("{}", rounded as u64);
-    }
-    format!("{rounded:.1}")
+    format!("{value:.1} {unit}")
 }
 
 pub(super) fn relative_age(modified: Option<SystemTime>, now: SystemTime) -> String {
