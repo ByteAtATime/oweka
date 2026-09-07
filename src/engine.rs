@@ -5,20 +5,25 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
 
-use dua_core::{Order, Options};
+use dua_core::{Options, Order};
 
 use crate::matcher::Artifact;
 use crate::registry::claim;
 
 #[derive(Debug)]
 pub enum ScanEvent {
-    Found { artifact: Artifact },
+    Found {
+        artifact: Artifact,
+    },
     Sized {
         artifact: Artifact,
         bytes: u64,
         last_modified: Option<SystemTime>,
     },
-    WalkError { path: PathBuf, reason: String },
+    WalkError {
+        path: PathBuf,
+        reason: String,
+    },
     Done,
 }
 
@@ -148,11 +153,7 @@ fn descend(entry: &dua_core::Entry) -> bool {
     claim(&path).is_none()
 }
 
-fn emit_if_artifact(
-    entry: &dua_core::Entry,
-    jobs: &Sender<Artifact>,
-    events: &Sender<ScanEvent>,
-) {
+fn emit_if_artifact(entry: &dua_core::Entry, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) {
     if entry.file_type.is_symlink() || !entry.file_type.is_dir() {
         return;
     }

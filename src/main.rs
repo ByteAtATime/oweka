@@ -8,6 +8,10 @@ fn main() {
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| env::current_dir().expect("working directory is readable"));
+    if !root.is_dir() {
+        eprintln!("{} does not exist or is not a directory", root.display());
+        std::process::exit(1);
+    }
     for event in engine::scan(&root) {
         match event {
             ScanEvent::Found { artifact } => {
