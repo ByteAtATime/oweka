@@ -40,6 +40,7 @@ pub struct App {
     finished: Option<Instant>,
     scroll: usize,
     table_state: TableState,
+    pending: Option<Artifact>,
 }
 
 impl App {
@@ -55,6 +56,7 @@ impl App {
             finished: None,
             scroll: 0,
             table_state: TableState::new(),
+            pending: None,
         }
     }
 
@@ -102,6 +104,28 @@ impl App {
         }
     }
 
+    pub fn open_confirm(&mut self, artifact: Artifact) {
+        self.pending = Some(artifact);
+    }
+
+    pub fn cancel_confirm(&mut self) {
+        self.pending = None;
+    }
+
+    pub fn pending_confirm(&self) -> Option<&Artifact> {
+        self.pending.as_ref()
+    }
+
+    pub fn confirm_pending(&mut self) -> Option<Artifact> {
+        let artifact = self.pending.take()?;
+        let row = find_row_mut(&mut self.rows, &artifact)?;
+        if row.deleting {
+            return None;
+        }
+        row.deleting = true;
+        Some(artifact)
+    }
+
     pub fn apply_delete_result(&mut self, result: DeleteResult) {
         match result.outcome {
             DeleteOutcome::Deleted => self.remove_deleted(&result.artifact),
@@ -120,6 +144,10 @@ impl App {
 
     pub(super) fn rows(&self) -> &[Row] {
         &self.rows
+    }
+
+    pub(super) fn row_for(&self, artifact: &Artifact) -> Option<&Row> {
+        self.rows.iter().find(|row| row_matches(row, artifact))
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -324,5 +352,53 @@ mod tests {
         assert_eq!(app.selected_index(), Some(1));
         app.move_cursor(-5);
         assert_eq!(app.selected_index(), Some(0));
+    }
+
+    #[test]
+    fn opening_confirmation_stores_pending_artifact() {
+        let mut app = streaming_app();
+        app.apply(ScanEvent::Done);
+        let target = artifact("venv", "/root/b");
+        app.open_confirm(target.clone());
+        assert_eq!(app.pending_confirm(), Some(&target));
+    }
+
+    #[test]
+    fn canceling_confirmation_marks_no_row_deleting() {
+        let mut app = streaming_app();
+        app.apply(ScanEvent::Done);
+        app.open_confirm(artifact("venv", "/root/b"));
+        app.cancel_confirm();
+        assert_eq!(app.pending_confirm(), None);
+        assert!(app.rows().iter().all(|row| !row.deleting));
+    }
+
+    #[test]
+    fn confirming_marks_row_by_path_not_selection() {
+        let mut app = streaming_app();
+        app.apply(ScanEvent::Done);
+        app.open_confirm(artifact("node_modules", "/root/b"));
+        app.move_cursor(-1);
+        let confirmed = app.confirm_pending();
+        assert_eq!(confirmed, Some(artifact("node_modules", "/root/b")));
+        assert_eq!(app.pending_confirm(), None);
+        let row = app
+            .rows()
+            .iter()
+            .find(|row| row.artifact.path == PathBuf::from("/root/b"))
+            .unwrap();
+        assert!(row.deleting);
+        assert!(app.rows().iter().filter(|row| row.deleting).count() == 1);
+    }
+
+    #[test]
+    fn confirming_missing_row_clears_pending_without_panic() {
+        let mut app = streaming_app();
+        app.apply(ScanEvent::Done);
+        app.open_confirm(artifact("venv", "/root/gone"));
+        let confirmed = app.confirm_pending();
+        assert_eq!(confirmed, None);
+        assert_eq!(app.pending_confirm(), None);
+        assert!(app.rows().iter().all(|row| !row.deleting));
     }
 }

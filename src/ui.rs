@@ -17,6 +17,8 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::engine::{DeleteResult, ScanEvent, delete_artifact};
+use crate::matcher::{Artifact, DeletionPolicy};
+use crate::registry::matcher_for;
 
 use app::App;
 
@@ -144,6 +146,18 @@ fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
         return true;
     }
+    if app.pending_confirm().is_some() {
+        match code {
+            KeyCode::Char('y') => {
+                confirm_deletion(app, sender.clone());
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.cancel_confirm();
+            }
+            _ => {}
+        }
+        return false;
+    }
     match code {
         KeyCode::Char('q') => true,
         KeyCode::Char('j') | KeyCode::Down => {
@@ -155,18 +169,37 @@ fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
             false
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
-            spawn_deletion(app, sender.clone());
+            request_deletion(app, sender.clone());
             false
         }
         _ => false,
     }
 }
 
-fn spawn_deletion(app: &mut App, sender: Sender<UiEvent>) {
+fn request_deletion(app: &mut App, sender: Sender<UiEvent>) {
     let Some(artifact) = app.deletion_target() else {
         return;
     };
-    app.mark_deleting(&artifact);
+    match matcher_for(artifact.matcher_id).map(|matcher| matcher.deletion_policy()) {
+        Some(DeletionPolicy::Instant) => {
+            app.mark_deleting(&artifact);
+            spawn_worker(sender, artifact);
+        }
+        Some(DeletionPolicy::Confirm) => {
+            app.open_confirm(artifact);
+        }
+        None => {}
+    }
+}
+
+fn confirm_deletion(app: &mut App, sender: Sender<UiEvent>) {
+    let Some(artifact) = app.confirm_pending() else {
+        return;
+    };
+    spawn_worker(sender, artifact);
+}
+
+fn spawn_worker(sender: Sender<UiEvent>, artifact: Artifact) {
     thread::spawn(move || {
         let result = delete_artifact(&artifact);
         let _ = sender.send(UiEvent::Deleted(result));

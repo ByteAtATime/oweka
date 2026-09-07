@@ -5,7 +5,10 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Cell, HighlightSpacing, Paragraph, Row as TableRow, Table};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Cell, Clear, HighlightSpacing, Padding, Paragraph, Row as TableRow,
+    Table,
+};
 
 use super::app::App;
 use super::format::{PENDING, display_path, format_size, relative_age, truncate_left};
@@ -32,6 +35,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_header(frame, app, areas[0]);
     draw_table(frame, app, areas[1]);
     draw_status(frame, app, areas[2]);
+    draw_confirm(frame, app);
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -112,8 +116,139 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
                 .bg(Color::White)
                 .add_modifier(Modifier::BOLD),
         );
+    let table = match app.pending_confirm() {
+        Some(_) => table.style(Style::default().add_modifier(Modifier::DIM)),
+        None => table,
+    };
     frame.render_stateful_widget(table, area, app.table_state_mut());
     app.set_render_selection(selection);
+}
+
+fn draw_confirm(frame: &mut Frame, app: &App) {
+    let Some(pending) = app.pending_confirm() else {
+        return;
+    };
+
+    let frame_area = frame.area();
+    if frame_area.width < 24 || frame_area.height < 8 {
+        return;
+    }
+    let max_inner = max_inner_width(frame_area) as usize;
+    let now = SystemTime::now();
+    let row = app.row_for(pending);
+
+    let size = row
+        .and_then(|r| r.bytes)
+        .map(format_size)
+        .unwrap_or_else(|| PENDING.to_string());
+
+    let age = match row.and_then(|r| r.last_modified) {
+        Some(modified) => relative_age(Some(modified), now),
+        None => String::from("unknown"),
+    };
+
+    let path_str = truncate_left(&pending.path.display().to_string(), max_inner);
+    let detail = format!("{size} · modified {age}");
+
+    let meta = Line::from(vec![
+        Span::styled(
+            format!("{} ", pending.matcher_id),
+            Style::default().bold().fg(Color::Yellow),
+        ),
+        Span::styled(detail, Style::default().fg(Color::Gray)),
+    ]);
+    let path_line = Line::from(Span::styled(
+        path_str.clone(),
+        Style::default().bold().fg(Color::White),
+    ));
+    let prompt = Line::from(Span::styled(
+        "This cannot be undone.",
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let title = Line::from(vec![Span::styled(
+        " Confirm delete ",
+        Style::default().bold().fg(Color::Red),
+    )]);
+    let actions = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("y", Style::default().bold().fg(Color::Red)),
+        Span::styled("es", Style::default().fg(Color::DarkGray)),
+        Span::styled(" / ", Style::default().fg(Color::DarkGray)),
+        Span::styled("n", Style::default().bold().fg(Color::White)),
+        Span::styled("o ", Style::default().fg(Color::DarkGray)),
+    ]);
+
+    let content_width = [meta.width(), path_line.width(), prompt.width()]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+        .max(title.width() + 4)
+        .max(actions.width() + 4)
+        .min(max_inner);
+    let path_str = truncate_left(&pending.path.display().to_string(), content_width);
+    let path_line = Line::from(Span::styled(
+        path_str,
+        Style::default().bold().fg(Color::White),
+    ));
+    let content_width = [meta.width(), path_line.width(), prompt.width()]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+        .max(title.width() + 4)
+        .max(actions.width() + 4)
+        .min(max_inner);
+
+    let lines = vec![meta, path_line, prompt];
+    let dialog_width = dialog_width_for(content_width, frame_area.width);
+    let dialog_height = (lines.len() as u16) + 4;
+    let area = centered(frame_area, dialog_width, dialog_height);
+
+    let modal = Paragraph::new(lines).alignment(Alignment::Center).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Red))
+            .style(Style::default().bg(Color::Rgb(24, 24, 27)))
+            .title(title.alignment(Alignment::Center))
+            .title_bottom(actions.alignment(Alignment::Center))
+            .padding(Padding::new(2, 2, 1, 1)),
+    );
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(modal, area);
+}
+
+fn max_inner_width(area: Rect) -> u16 {
+    area.width.saturating_sub(8).saturating_sub(6).max(10)
+}
+
+fn dialog_width_for(content_width: usize, available_width: u16) -> u16 {
+    let wanted = (content_width as u16).saturating_add(6).max(28);
+    let max = available_width.saturating_sub(4).max(28);
+    wanted.min(max)
+}
+
+fn centered(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width).max(1);
+    let height = height.min(area.height).max(1);
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(area.height.saturating_sub(height) / 2),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(area.width.saturating_sub(width) / 2),
+            Constraint::Length(width),
+            Constraint::Min(0),
+        ])
+        .split(vertical[1]);
+    horizontal[1]
 }
 
 fn scrolled_start(app: &App, len: usize, selection: Option<usize>, visible_rows: usize) -> usize {
