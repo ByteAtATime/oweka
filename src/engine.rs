@@ -134,7 +134,7 @@ fn measure(artifact: &Path, events: &Sender<ScanEvent>) -> SizeTally {
 
 fn worker_count() -> usize {
     thread::available_parallelism()
-        .map(|count| count.get().min(8))
+        .map(|count| count.get())
         .unwrap_or(4)
 }
 
