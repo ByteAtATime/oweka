@@ -4,10 +4,11 @@ mod view;
 
 use std::io::{self, Stdout};
 use std::path::Path;
-use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -19,9 +20,17 @@ use crate::engine::ScanEvent;
 
 use app::App;
 
-pub fn run(root: &Path, events: Receiver<ScanEvent>) -> io::Result<()> {
+const TICK: Duration = Duration::from_millis(100);
+
+pub enum UiEvent {
+    Tick,
+    Key(KeyEvent),
+    Scan(ScanEvent),
+}
+
+pub fn run(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<()> {
     enter_terminal()?;
-    let outcome = run_loop(root, events);
+    let outcome = run_loop(root, scan_events);
     leave_terminal()?;
     outcome
 }
@@ -48,37 +57,80 @@ fn install_restore_hook() {
     }));
 }
 
-fn run_loop(root: &Path, events: Receiver<ScanEvent>) -> io::Result<()> {
+fn run_loop(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal: Terminal<CrosstermBackend<Stdout>> = Terminal::new(backend)?;
     let mut app = App::new(root.to_path_buf());
+    let (ui_sender, ui_events) = mpsc::channel();
+    spawn_event_thread(ui_sender.clone());
+    spawn_scan_bridge(scan_events, ui_sender);
     loop {
-        drain_events(&events, &mut app);
         terminal.draw(|frame| view::draw(frame, &mut app))?;
-        if poll_quit(&mut app)? {
-            return Ok(());
+        match next_ui_event(&ui_events, &mut app)? {
+            UiEvent::Key(key) => {
+                if handle_key(&mut app, key) {
+                    return Ok(());
+                }
+            }
+            UiEvent::Tick | UiEvent::Scan(_) => {}
         }
     }
 }
 
-fn drain_events(events: &Receiver<ScanEvent>, app: &mut App) {
-    while let Ok(event) = events.try_recv() {
-        app.apply(event);
+fn next_ui_event(ui_events: &Receiver<UiEvent>, app: &mut App) -> io::Result<UiEvent> {
+    match ui_events
+        .recv()
+        .map_err(|_| io::Error::other("event sources stopped"))?
+    {
+        UiEvent::Scan(event) => {
+            app.apply(event);
+            while let Ok(follow_up) = ui_events.try_recv() {
+                match follow_up {
+                    UiEvent::Scan(event) => app.apply(event),
+                    other => return Ok(other),
+                }
+            }
+            Ok(UiEvent::Tick)
+        }
+        other => Ok(other),
     }
 }
 
-fn poll_quit(app: &mut App) -> io::Result<bool> {
-    if !event::poll(Duration::from_millis(100))? {
-        return Ok(false);
-    }
-    match event::read()? {
-        Event::Key(key) if key.kind == KeyEventKind::Release => Ok(false),
-        Event::Key(key) => Ok(handle_key(app, key.code, key.modifiers)),
-        _ => Ok(false),
-    }
+fn spawn_event_thread(sender: Sender<UiEvent>) {
+    thread::spawn(move || {
+        let mut last_tick = Instant::now();
+        loop {
+            let timeout = TICK.checked_sub(last_tick.elapsed()).unwrap_or(TICK);
+            if event::poll(timeout).is_ok_and(|ready| ready)
+                && let Ok(Event::Key(key)) = event::read()
+                && key.kind == KeyEventKind::Press
+                && sender.send(UiEvent::Key(key)).is_err()
+            {
+                return;
+            }
+            if last_tick.elapsed() >= TICK {
+                last_tick = Instant::now();
+                if sender.send(UiEvent::Tick).is_err() {
+                    return;
+                }
+            }
+        }
+    });
 }
 
-fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) -> bool {
+fn spawn_scan_bridge(scan_events: Receiver<ScanEvent>, sender: Sender<UiEvent>) {
+    thread::spawn(move || {
+        for event in scan_events {
+            if sender.send(UiEvent::Scan(event)).is_err() {
+                return;
+            }
+        }
+    });
+}
+
+fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    let code = key.code;
+    let modifiers = key.modifiers;
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
         return true;
     }
