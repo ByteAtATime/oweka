@@ -185,7 +185,7 @@ fn discover(root: &Path, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) {
         root,
         worker_count(),
         Order::ParentFirst,
-        Options::default(),
+        Options::default().skip_metadata(),
         descend,
     );
     for item in walk {
