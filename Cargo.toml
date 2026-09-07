@@ -9,5 +9,10 @@ dua-core = "3.3.1"
 ratatui = "0.30.2"
 
 [dev-dependencies]
+criterion = "0.8"
 filetime = "0.2.29"
 tempfile = "3.27.0"
+
+[[bench]]
+name = "scan"
+harness = false
