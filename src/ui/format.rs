@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
+use ratatui::style::{Color, Modifier, Style};
+
 pub(super) const PENDING: &str = "...";
 
 pub(super) fn format_size(bytes: u64) -> String {
@@ -28,6 +30,30 @@ pub(super) fn relative_age(modified: Option<SystemTime>, now: SystemTime) -> Str
     format_age(age)
 }
 
+pub(super) fn age_style(modified: Option<SystemTime>, now: SystemTime) -> Style {
+    let Some(instant) = modified else {
+        return Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM);
+    };
+    let age = now.duration_since(instant).unwrap_or(Duration::ZERO);
+    age_bucket_style(age)
+}
+
+fn age_bucket_style(age: Duration) -> Style {
+    let seconds = age.as_secs();
+    if seconds < 86400 {
+        Style::default().fg(Color::Green)
+    } else if seconds < 86400 * 30 {
+        Style::default().fg(Color::Cyan)
+    } else if seconds < 86400 * 180 {
+        Style::default().fg(Color::Gray)
+    } else {
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM)
+    }
+}
 fn format_age(age: Duration) -> String {
     let seconds = age.as_secs();
     if seconds < 60 {

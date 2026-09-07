@@ -11,7 +11,7 @@ use ratatui::widgets::{
 };
 
 use super::app::App;
-use super::format::{PENDING, display_path, format_size, relative_age, truncate_left};
+use super::format::{PENDING, age_style, display_path, format_size, relative_age, truncate_left};
 
 const PATH_MIN_WIDTH: u16 = 8;
 const MATCHER_WIDTH: u16 = 13;
@@ -85,11 +85,17 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|row| {
             let path = truncate_left(&display_path(app.root(), &row.artifact.path), path_width);
             let modified = relative_age(row.last_modified, now);
+            let modified_style = age_style(row.last_modified, now);
             let size = row_size_text(row);
+            let modified_cell = if row.failed {
+                Cell::from(modified)
+            } else {
+                Cell::from(Span::styled(modified, modified_style))
+            };
             let cells = TableRow::new([
                 Cell::from(path),
                 Cell::from(row.artifact.matcher_id),
-                Cell::from(modified),
+                modified_cell,
                 Cell::from(Line::from(size).alignment(Alignment::Right)),
             ]);
             if row.failed {
@@ -154,16 +160,20 @@ fn draw_confirm(frame: &mut Frame, app: &App) {
         Some(modified) => relative_age(Some(modified), now),
         None => String::from("unknown"),
     };
+    let age_color = age_style(row.and_then(|r| r.last_modified), now);
 
     let path_str = truncate_left(&pending.path.display().to_string(), max_inner);
-    let detail = format!("{size} · modified {age}");
 
     let meta = Line::from(vec![
         Span::styled(
             format!("{} ", pending.matcher_id),
             Style::default().bold().fg(Color::Yellow),
         ),
-        Span::styled(detail, Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!("{size} · modified "),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(age, age_color),
     ]);
     let path_line = Line::from(Span::styled(
         path_str.clone(),
