@@ -74,12 +74,18 @@ fn format_age(age: Duration) -> String {
     format!("{}y ago", seconds / (86400 * 365))
 }
 
-pub(super) fn display_path(root: &Path, path: &Path) -> String {
-    let stripped = path.strip_prefix(root).unwrap_or(path);
-    if stripped.as_os_str().is_empty() {
-        return String::from(".");
+pub(super) fn display_path(path: &Path) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = Path::new(&home);
+        if let Ok(stripped) = path.strip_prefix(home_path) {
+            if stripped.as_os_str().is_empty() {
+                return String::from("~");
+            }
+            return Path::new("~").join(stripped).display().to_string();
+        }
     }
-    stripped.display().to_string()
+
+    path.display().to_string()
 }
 
 pub(super) fn truncate_left(text: &str, width: usize) -> String {

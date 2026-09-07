@@ -85,7 +85,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     let body: Vec<TableRow> = window
         .iter()
         .map(|row| {
-            let path = truncate_left(&display_path(app.root(), &row.artifact.path), path_width);
+            let path = truncate_left(&display_path(&row.artifact.path), path_width);
             let modified = relative_age(row.last_modified, now);
             let modified_style = age_style(row.last_modified, now);
             let size = row_size_text(row);
