@@ -112,6 +112,13 @@ pub enum DeleteOutcome {
     IoFailed(io::Error),
 }
 
+#[derive(Debug)]
+pub struct DeleteResult {
+    pub artifact: Artifact,
+    pub outcome: DeleteOutcome,
+    pub rescan: Option<SizeReport>,
+}
+
 pub fn size_artifact(artifact: &Artifact) -> SizeReport {
     let mut report = SizeReport::default();
     let mut pending = vec![artifact.path.clone()];
@@ -133,11 +140,28 @@ pub fn size_artifact(artifact: &Artifact) -> SizeReport {
     report
 }
 
-pub fn delete_artifact(artifact: &Artifact) -> DeleteOutcome {
+pub fn delete_artifact(artifact: &Artifact) -> DeleteResult {
+    let outcome = delete_outcome(artifact);
+    let rescan = rescan_after(artifact, &outcome);
+    DeleteResult {
+        artifact: artifact.clone(),
+        outcome,
+        rescan,
+    }
+}
+
+fn delete_outcome(artifact: &Artifact) -> DeleteOutcome {
     if !is_still_claimed(artifact) {
         return DeleteOutcome::NotFound;
     }
     invoke_matcher_delete(artifact)
+}
+
+fn rescan_after(artifact: &Artifact, outcome: &DeleteOutcome) -> Option<SizeReport> {
+    match outcome {
+        DeleteOutcome::Deleted => None,
+        _ => Some(size_artifact(artifact)),
+    }
 }
 
 fn is_still_claimed(artifact: &Artifact) -> bool {

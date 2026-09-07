@@ -16,9 +16,9 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use crate::engine::{DeleteOutcome, ScanEvent, delete_artifact, size_artifact};
+use crate::engine::{DeleteResult, ScanEvent, delete_artifact};
 
-use app::{App, DeleteResult};
+use app::App;
 
 const TICK: Duration = Duration::from_millis(100);
 
@@ -168,15 +168,7 @@ fn spawn_deletion(app: &mut App, sender: Sender<UiEvent>) {
     };
     app.mark_deleting(&artifact);
     thread::spawn(move || {
-        let outcome = delete_artifact(&artifact);
-        let rescan = match &outcome {
-            DeleteOutcome::Deleted => None,
-            _ => Some(size_artifact(&artifact)),
-        };
-        let _ = sender.send(UiEvent::Deleted(DeleteResult {
-            artifact,
-            outcome,
-            rescan,
-        }));
+        let result = delete_artifact(&artifact);
+        let _ = sender.send(UiEvent::Deleted(result));
     });
 }

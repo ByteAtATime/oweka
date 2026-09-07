@@ -6,18 +6,12 @@ use std::time::{Instant, SystemTime};
 use ratatui::widgets::TableState;
 
 use crate::engine::ScanEvent;
-use crate::engine::{DeleteOutcome, SizeReport};
+use crate::engine::{DeleteOutcome, DeleteResult, SizeReport};
 use crate::matcher::Artifact;
 
 struct ScanError {
     path: PathBuf,
     reason: String,
-}
-
-pub struct DeleteResult {
-    pub artifact: Artifact,
-    pub outcome: DeleteOutcome,
-    pub rescan: Option<SizeReport>,
 }
 
 pub(super) struct Row {
