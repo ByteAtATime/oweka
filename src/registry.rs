@@ -51,8 +51,5 @@ pub fn claim(dir: &Path) -> Option<&'static str> {
 }
 
 pub fn matcher_for(id: &str) -> Option<&'static dyn Matcher> {
-    REGISTRY
-        .iter()
-        .find(|matcher| matcher.id() == id)
-        .copied()
+    REGISTRY.iter().find(|matcher| matcher.id() == id).copied()
 }
