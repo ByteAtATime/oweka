@@ -15,3 +15,7 @@ tempfile = "3.27.0"
 [[bench]]
 name = "scan"
 harness = false
+
+[profile.release]
+codegen-units = 1
+lto = true
