@@ -1,14 +1,15 @@
 use std::fs::{self, DirEntry};
+use std::io;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
 
-use dua_core::{Options, Order};
-
 use crate::matcher::Artifact;
 use crate::registry::claim;
+use crate::walker::walk_dirs;
 
 #[derive(Debug)]
 pub enum ScanEvent {
@@ -37,13 +38,13 @@ pub fn scan(root: &Path) -> Receiver<ScanEvent> {
 fn run_pipeline(root: &Path, events: &Sender<ScanEvent>) {
     let (jobs, queue) = mpsc::channel::<Artifact>();
     let shared = Arc::new(Mutex::new(queue));
-    let workers: Vec<_> = (0..worker_count())
+    let sizers: Vec<_> = (0..worker_count().get())
         .map(|_| spawn_sizer(Arc::clone(&shared), events.clone()))
         .collect();
     discover(root, &jobs, events);
     drop(jobs);
-    for worker in workers {
-        let _ = worker.join();
+    for sizer in sizers {
+        let _ = sizer.join();
     }
     let _ = events.send(ScanEvent::Done);
 }
@@ -53,10 +54,7 @@ fn spawn_sizer(
     events: Sender<ScanEvent>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        while let Ok(artifact) = {
-            let queue = queue.lock().unwrap();
-            queue.recv()
-        } {
+        while let Some(artifact) = next_job(&queue) {
             let tally = measure(&artifact.path, &events);
             let _ = events.send(ScanEvent::Sized {
                 artifact,
@@ -67,23 +65,20 @@ fn spawn_sizer(
     })
 }
 
+fn next_job(queue: &Mutex<Receiver<Artifact>>) -> Option<Artifact> {
+    queue.lock().unwrap().recv().ok()
+}
+
+#[derive(Default)]
 struct SizeTally {
     bytes: u64,
     last_modified: Option<SystemTime>,
 }
 
-fn newer(first: Option<SystemTime>, second: Option<SystemTime>) -> Option<SystemTime> {
-    match (first, second) {
-        (Some(first), Some(second)) => Some(first.max(second)),
-        (Some(first), None) => Some(first),
-        (None, second) => second,
-    }
-}
-
 impl SizeTally {
     fn add_file(&mut self, metadata: &fs::Metadata) {
         self.bytes += metadata.len();
-        self.last_modified = newer(self.last_modified, metadata.modified().ok());
+        self.last_modified = self.last_modified.max(metadata.modified().ok());
     }
 }
 
@@ -95,10 +90,7 @@ fn accumulate(
 ) {
     let file_type = match entry.file_type() {
         Ok(file_type) => file_type,
-        Err(reason) => {
-            send_walk_error(&entry.path(), &reason.to_string(), events);
-            return;
-        }
+        Err(reason) => return report_walk_error(&entry.path(), &reason, events),
     };
     if file_type.is_symlink() {
         return;
@@ -109,89 +101,78 @@ fn accumulate(
     }
     match entry.metadata() {
         Ok(metadata) => tally.add_file(&metadata),
-        Err(reason) => send_walk_error(&entry.path(), &reason.to_string(), events),
+        Err(reason) => report_walk_error(&entry.path(), &reason, events),
     }
 }
 
 fn measure(artifact: &Path, events: &Sender<ScanEvent>) -> SizeTally {
-    let mut tally = SizeTally {
-        bytes: 0,
-        last_modified: None,
-    };
+    let mut tally = SizeTally::default();
     let mut pending = vec![artifact.to_path_buf()];
-    while let Some(dir) = pending.pop() {
-        match fs::read_dir(&dir) {
-            Ok(entries) => {
-                for entry in entries {
-                    match entry {
-                        Ok(entry) => accumulate(&entry, &mut tally, &mut pending, events),
-                        Err(reason) => send_walk_error(&dir, &reason.to_string(), events),
-                    }
-                }
+    while let Some(directory) = pending.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(reason) => {
+                report_walk_error(&directory, &reason, events);
+                continue;
             }
-            Err(reason) => send_walk_error(&dir, &reason.to_string(), events),
+        };
+        for entry in entries {
+            match entry {
+                Ok(entry) => accumulate(&entry, &mut tally, &mut pending, events),
+                Err(reason) => report_walk_error(&directory, &reason, events),
+            }
         }
     }
     tally
 }
 
-fn worker_count() -> usize {
-    thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(4)
+fn worker_count() -> NonZeroUsize {
+    thread::available_parallelism().unwrap_or(NonZeroUsize::new(4).unwrap())
 }
 
 fn is_git(path: &Path) -> bool {
     path.file_name().is_some_and(|name| name == ".git")
 }
 
-fn descend(entry: &dua_core::Entry) -> bool {
-    if !entry.file_type.is_dir() {
-        return true;
-    }
-    let path = entry.path();
-    if is_git(&path) {
+fn visit_candidate(candidate: &Path, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) -> bool {
+    if let Some(matcher_id) = claim(candidate) {
+        emit_artifact(candidate, matcher_id, jobs, events);
         return false;
     }
-    claim(&path).is_none()
+    !is_git(candidate)
 }
 
-fn emit_if_artifact(entry: &dua_core::Entry, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) {
-    if entry.file_type.is_symlink() || !entry.file_type.is_dir() {
-        return;
-    }
-    let path = entry.path();
-    if is_git(&path) {
-        return;
-    }
-    if let Some(matcher_id) = claim(&path) {
-        let artifact = Artifact { matcher_id, path };
-        let _ = events.send(ScanEvent::Found {
-            artifact: artifact.clone(),
-        });
-        let _ = jobs.send(artifact);
-    }
+fn emit_artifact(
+    path: &Path,
+    matcher_id: &'static str,
+    jobs: &Sender<Artifact>,
+    events: &Sender<ScanEvent>,
+) {
+    let artifact = Artifact {
+        matcher_id,
+        path: path.to_path_buf(),
+    };
+    let _ = events.send(ScanEvent::Found {
+        artifact: artifact.clone(),
+    });
+    let _ = jobs.send(artifact);
 }
 
-fn send_walk_error(root: &Path, reason: &str, events: &Sender<ScanEvent>) {
+fn report_walk_error(path: &Path, reason: &io::Error, events: &Sender<ScanEvent>) {
     let _ = events.send(ScanEvent::WalkError {
-        path: root.to_path_buf(),
+        path: path.to_path_buf(),
         reason: reason.to_string(),
     });
 }
 
 fn discover(root: &Path, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) {
-    let walk = dua_core::walk(
+    if !visit_candidate(root, jobs, events) {
+        return;
+    }
+    walk_dirs(
         root,
         worker_count(),
-        Order::ParentFirst,
-        Options::default().skip_metadata(),
-        descend,
+        &|candidate| visit_candidate(candidate, jobs, events),
+        &|path, reason| report_walk_error(path, reason, events),
     );
-    for item in walk {
-        match item {
-            Ok(entry) => emit_if_artifact(&entry, jobs, events),
-            Err(reason) => send_walk_error(root, &reason.to_string(), events),
-        }
-    }
 }

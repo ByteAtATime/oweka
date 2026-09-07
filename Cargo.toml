@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 crossterm = "0.29.0"
-dua-core = "4.0.0"
 ratatui = "0.30.2"
 
 [dev-dependencies]
