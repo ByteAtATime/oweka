@@ -105,19 +105,27 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(MODIFIED_WIDTH),
         Constraint::Length(SIZE_WIDTH),
     ];
+    let scanning = !app.is_done();
+    let row_highlight = if scanning {
+        Style::default()
+            .fg(Color::Gray)
+            .bg(Color::Black)
+            .add_modifier(Modifier::DIM)
+    } else {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    };
     let table = Table::new(body, widths)
         .header(header)
         .column_spacing(COLUMN_SPACING)
         .highlight_symbol(HIGHLIGHT_SYMBOL)
         .highlight_spacing(HighlightSpacing::Always)
-        .row_highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        );
+        .row_highlight_style(row_highlight);
     let table = match app.pending_confirm() {
         Some(_) => table.style(Style::default().add_modifier(Modifier::DIM)),
+        None if scanning => table.style(Style::default().add_modifier(Modifier::DIM)),
         None => table,
     };
     frame.render_stateful_widget(table, area, app.table_state_mut());
