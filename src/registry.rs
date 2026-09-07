@@ -6,7 +6,7 @@ pub struct NodeModules;
 
 impl Matcher for NodeModules {
     fn id(&self) -> &'static str {
-        "node_modules"
+        "nodejs"
     }
 
     fn matches(&self, dir: &Path) -> bool {
@@ -14,11 +14,11 @@ impl Matcher for NodeModules {
     }
 }
 
-pub struct Target;
+pub struct RustMatcher;
 
-impl Matcher for Target {
+impl Matcher for RustMatcher {
     fn id(&self) -> &'static str {
-        "target"
+        "rust"
     }
 
     fn matches(&self, dir: &Path) -> bool {
@@ -30,11 +30,11 @@ impl Matcher for Target {
     }
 }
 
-pub struct Venv;
+pub struct PythonMatcher;
 
-impl Matcher for Venv {
+impl Matcher for PythonMatcher {
     fn id(&self) -> &'static str {
-        "venv"
+        "python"
     }
 
     fn matches(&self, dir: &Path) -> bool {
@@ -52,7 +52,7 @@ impl Matcher for Venv {
     }
 }
 
-pub static REGISTRY: &[&dyn Matcher] = &[&NodeModules, &Target, &Venv];
+pub static REGISTRY: &[&dyn Matcher] = &[&NodeModules, &RustMatcher, &PythonMatcher];
 
 pub fn claim(dir: &Path) -> Option<&'static dyn Matcher> {
     REGISTRY

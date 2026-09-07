@@ -14,7 +14,7 @@ use super::app::{App, RowView, ViewState};
 use super::format::{PENDING, age_style, display_path, format_size, relative_age, truncate_left};
 
 const PATH_MIN_WIDTH: u16 = 8;
-const MATCHER_WIDTH: u16 = 13;
+const MATCHER_WIDTH: u16 = 10;
 const MODIFIED_WIDTH: u16 = 10;
 const SIZE_WIDTH: u16 = 12;
 const HIGHLIGHT_SYMBOL: &str = "▸ ";
