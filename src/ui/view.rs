@@ -7,10 +7,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, ToLine};
 use ratatui::widgets::{
     Block, BorderType, Borders, Cell, Clear, HighlightSpacing, Padding, Paragraph, Row as TableRow,
-    Table,
+    Table, TableState,
 };
 
-use super::app::App;
+use super::app::{App, RowView, ViewState};
 use super::format::{PENDING, age_style, display_path, format_size, relative_age, truncate_left};
 
 const PATH_MIN_WIDTH: u16 = 8;
@@ -31,26 +31,30 @@ pub fn draw(frame: &mut Frame, app: &mut App, now: Instant, wall: SystemTime) {
             Constraint::Length(1),
         ])
         .split(frame.area());
-    draw_header(frame, app, areas[0], now);
-    draw_table(frame, app, areas[1], wall);
-    draw_status(frame, app, areas[2]);
-    draw_confirm(frame, app, wall);
+    let view = app.view_state(areas[1].height, now, wall);
+    draw_header(frame, &view, areas[0]);
+    draw_table(frame, &view, areas[1], wall);
+    draw_status(frame, &view, areas[2]);
+    draw_confirm(frame, &view, wall);
 }
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect, now: Instant) {
+fn draw_header(frame: &mut Frame, view: &ViewState, area: Rect) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let status = app.scan_status(now);
     let title = Line::from(vec![
         Span::styled("oweka", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(format!(" · {} · {} ", app.root().display(), status)),
+        Span::raw(format!(
+            " · {} · {} ",
+            view.root.display(),
+            view.scan_status
+        )),
         Span::styled(
-            format!("{} found", app.rows().len()),
+            format!("{} found", view.row_count),
             Style::default().add_modifier(Modifier::BOLD),
         ),
     ]);
-    let hint = header_hint(app);
+    let hint = header_hint(view);
     let hint_width = hint.width() as u16;
     let top = Rect::new(area.x, area.y, area.width, 1);
     if hint_width == 0 || area.width < hint_width + 12 {
@@ -70,10 +74,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect, now: Instant) {
     }
 }
 
-fn header_hint(app: &App) -> Line<'static> {
-    if app.pending_confirm().is_some() {
+fn header_hint(view: &ViewState) -> Line<'static> {
+    if view.confirm.is_some() {
         hint_line(&[("y", "confirm"), ("n", "cancel")])
-    } else if !app.is_done() {
+    } else if !view.done {
         hint_line(&[("q", "quit")])
     } else {
         hint_line(&[
@@ -110,9 +114,9 @@ fn rule_line(width: u16) -> Line<'static> {
     Line::from("─".repeat(width.max(1) as usize).dim())
 }
 
-fn draw_table(frame: &mut Frame, app: &mut App, area: Rect, wall: SystemTime) {
-    if app.is_empty() {
-        let message = empty_message(app);
+fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime) {
+    if view.row_count == 0 {
+        let message = empty_message(view);
         let hint = Paragraph::new(Line::from(Span::styled(
             message,
             Style::default().add_modifier(Modifier::DIM),
@@ -120,17 +124,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect, wall: SystemTime) {
         frame.render_widget(hint, area);
         return;
     }
-    let now = wall;
     let path_width = path_column_width(area);
-    let visible_rows = area.height.saturating_sub(1) as usize;
-    app.set_page_size(visible_rows);
-    let len = app.rows().len();
-    let selection = app.selected_index();
-    let start = scrolled_start(app, len, selection, visible_rows);
-    app.set_scroll(start);
-    let end = (start + visible_rows).min(len);
-    app.set_render_selection(selection.map(|selected| selected - start));
-    let window = &app.rows()[start..end];
     let header = TableRow::new([
         Cell::from("path"),
         Cell::from("matcher"),
@@ -138,12 +132,13 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect, wall: SystemTime) {
         Cell::from(Line::from("size").alignment(Alignment::Right)),
     ])
     .style(Style::default().add_modifier(Modifier::DIM));
-    let body: Vec<TableRow> = window
+    let body: Vec<TableRow> = view
+        .rows
         .iter()
         .map(|row| {
-            let path = truncate_left(&display_path(&row.artifact.path), path_width);
-            let modified = relative_age(row.last_modified, now);
-            let modified_style = age_style(row.last_modified, now);
+            let path = truncate_left(&display_path(&row.path), path_width);
+            let modified = relative_age(row.last_modified, wall);
+            let modified_style = age_style(row.last_modified, wall);
             let size = row_size_text(row);
             let modified_cell = if row.failed {
                 Cell::from(modified)
@@ -152,7 +147,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect, wall: SystemTime) {
             };
             let cells = TableRow::new([
                 Cell::from(path),
-                Cell::from(row.artifact.matcher_id),
+                Cell::from(row.matcher_id),
                 modified_cell,
                 Cell::from(Line::from(size).alignment(Alignment::Right)),
             ]);
@@ -169,7 +164,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect, wall: SystemTime) {
         Constraint::Length(MODIFIED_WIDTH),
         Constraint::Length(SIZE_WIDTH),
     ];
-    let scanning = !app.is_done();
+    let scanning = !view.done;
     let row_highlight = if scanning {
         Style::default()
             .fg(Color::Gray)
@@ -187,17 +182,17 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect, wall: SystemTime) {
         .highlight_symbol(HIGHLIGHT_SYMBOL)
         .highlight_spacing(HighlightSpacing::Always)
         .row_highlight_style(row_highlight);
-    let table = match app.pending_confirm() {
+    let table = match view.confirm {
         Some(_) => table.style(Style::default().add_modifier(Modifier::DIM)),
         None if scanning => table.style(Style::default().add_modifier(Modifier::DIM)),
         None => table,
     };
-    frame.render_stateful_widget(table, area, app.table_state_mut());
-    app.set_render_selection(selection);
+    let mut state = TableState::default().with_selected(view.selection);
+    frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn draw_confirm(frame: &mut Frame, app: &App, wall: SystemTime) {
-    let Some((pending, note)) = app.pending_confirm() else {
+fn draw_confirm(frame: &mut Frame, view: &ViewState, wall: SystemTime) {
+    let Some(pending) = view.confirm.as_ref() else {
         return;
     };
 
@@ -206,21 +201,16 @@ fn draw_confirm(frame: &mut Frame, app: &App, wall: SystemTime) {
         return;
     }
     let max_inner = max_inner_width(frame_area) as usize;
-    let now = wall;
-    let row = app.row_for(pending);
-
-    let size = row
-        .and_then(|r| r.bytes)
+    let size = pending
+        .bytes
         .map(format_size)
         .unwrap_or_else(|| PENDING.to_string());
 
-    let age = match row.and_then(|r| r.last_modified) {
-        Some(modified) => relative_age(Some(modified), now),
+    let age = match pending.last_modified {
+        Some(modified) => relative_age(Some(modified), wall),
         None => String::from("unknown"),
     };
-    let age_color = age_style(row.and_then(|r| r.last_modified), now);
-
-    let path_str = truncate_left(&pending.path.display().to_string(), max_inner);
+    let age_color = age_style(pending.last_modified, wall);
 
     let meta = Line::from(vec![
         Span::styled(
@@ -233,15 +223,11 @@ fn draw_confirm(frame: &mut Frame, app: &App, wall: SystemTime) {
         ),
         Span::styled(age, age_color),
     ]);
-    let path_line = Line::from(Span::styled(
-        path_str.clone(),
-        Style::default().bold().fg(Color::White),
-    ));
     let prompt = Line::from(Span::styled(
         "This cannot be undone.",
         Style::default().fg(Color::DarkGray),
     ));
-    let note_line = note.map(|text| {
+    let note_line = pending.note.map(|text| {
         Line::from(Span::styled(
             text.to_string(),
             Style::default().fg(Color::Yellow),
@@ -262,27 +248,33 @@ fn draw_confirm(frame: &mut Frame, app: &App, wall: SystemTime) {
         Span::styled("o ", Style::default().fg(Color::DarkGray)),
     ]);
 
-    let content_width = [meta.width(), path_line.width(), prompt.width()]
-        .into_iter()
-        .max()
-        .unwrap_or(0)
-        .max(note_width)
-        .max(title.width() + 4)
-        .max(actions.width() + 4)
-        .min(max_inner);
-    let path_str = truncate_left(&pending.path.display().to_string(), content_width);
+    let path_first = truncate_left(&pending.path.display().to_string(), max_inner);
+    let first_width = confirm_content_width(
+        [
+            meta.width(),
+            Line::from(path_first.as_str()).width(),
+            prompt.width(),
+            note_width,
+            title.width() + 4,
+            actions.width() + 4,
+        ],
+        max_inner,
+    );
     let path_line = Line::from(Span::styled(
-        path_str,
+        truncate_left(&pending.path.display().to_string(), first_width),
         Style::default().bold().fg(Color::White),
     ));
-    let content_width = [meta.width(), path_line.width(), prompt.width()]
-        .into_iter()
-        .max()
-        .unwrap_or(0)
-        .max(note_width)
-        .max(title.width() + 4)
-        .max(actions.width() + 4)
-        .min(max_inner);
+    let content_width = confirm_content_width(
+        [
+            meta.width(),
+            path_line.width(),
+            prompt.width(),
+            note_width,
+            title.width() + 4,
+            actions.width() + 4,
+        ],
+        max_inner,
+    );
 
     let mut lines = vec![meta, path_line];
     if let Some(note_line) = note_line {
@@ -313,6 +305,10 @@ fn max_inner_width(area: Rect) -> u16 {
     area.width.saturating_sub(8).saturating_sub(6).max(10)
 }
 
+fn confirm_content_width(widths: [usize; 6], max_inner: usize) -> usize {
+    widths.into_iter().max().unwrap_or(0).min(max_inner)
+}
+
 fn dialog_width_for(content_width: usize, available_width: u16) -> u16 {
     let wanted = (content_width as u16).saturating_add(6).max(28);
     let max = available_width.saturating_sub(4).max(28);
@@ -341,20 +337,6 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     horizontal[1]
 }
 
-fn scrolled_start(app: &App, len: usize, selection: Option<usize>, visible_rows: usize) -> usize {
-    let mut start = app.scroll().min(len - 1);
-    let Some(selected) = selection else {
-        return start;
-    };
-    if selected < start {
-        return selected;
-    }
-    if selected >= start + visible_rows.max(1) {
-        start = selected + 1 - visible_rows.max(1);
-    }
-    start
-}
-
 fn path_column_width(area: Rect) -> usize {
     area.width.saturating_sub(
         HIGHLIGHT_WIDTH
@@ -365,25 +347,23 @@ fn path_column_width(area: Rect) -> usize {
     ) as usize
 }
 
-fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
-    let potential = format_size(app.total_bytes());
-    let freed = format_size(app.freed_bytes());
+fn draw_status(frame: &mut Frame, view: &ViewState, area: Rect) {
     let first = Line::from(Span::raw(format!(
-        "Potential Space {potential} · Freed Space {freed} · errors {}",
-        app.error_count()
+        "Potential Space {} · Freed Space {} · errors {}",
+        view.potential, view.freed, view.error_count
     )));
     frame.render_widget(Paragraph::new(first), area);
 }
 
-fn empty_message(app: &App) -> &'static str {
-    if app.is_done() {
+fn empty_message(view: &ViewState) -> &'static str {
+    if view.done {
         "no artifacts found"
     } else {
         "waiting for artifacts…"
     }
 }
 
-fn row_size_text(row: &super::app::Row) -> String {
+fn row_size_text(row: &RowView) -> String {
     if row.deleting {
         String::from("deleting…")
     } else {

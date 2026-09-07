@@ -3,8 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
-use ratatui::widgets::TableState;
-
+use super::format::format_size;
 use crate::engine::ScanEvent;
 use crate::engine::{DeleteOutcome, DeleteResult, SizeReport};
 use crate::matcher::Artifact;
@@ -36,6 +35,36 @@ fn hash_path(path: &Path) -> u64 {
     hasher.finish()
 }
 
+pub struct RowView {
+    pub path: PathBuf,
+    pub matcher_id: &'static str,
+    pub bytes: Option<u64>,
+    pub last_modified: Option<SystemTime>,
+    pub deleting: bool,
+    pub failed: bool,
+}
+
+pub struct ConfirmView {
+    pub path: PathBuf,
+    pub matcher_id: &'static str,
+    pub note: Option<&'static str>,
+    pub bytes: Option<u64>,
+    pub last_modified: Option<SystemTime>,
+}
+
+pub struct ViewState {
+    pub scan_status: String,
+    pub done: bool,
+    pub row_count: usize,
+    pub root: PathBuf,
+    pub potential: String,
+    pub freed: String,
+    pub error_count: usize,
+    pub rows: Vec<RowView>,
+    pub selection: Option<usize>,
+    pub confirm: Option<ConfirmView>,
+}
+
 pub struct App {
     root: PathBuf,
     rows: Vec<Row>,
@@ -47,7 +76,7 @@ pub struct App {
     finished: Option<Instant>,
     scroll: usize,
     page_size: usize,
-    table_state: TableState,
+    selected: Option<usize>,
     pending: Option<Pending>,
 }
 
@@ -64,7 +93,7 @@ impl App {
             finished: None,
             scroll: 0,
             page_size: 0,
-            table_state: TableState::new(),
+            selected: None,
             pending: None,
         }
     }
@@ -89,9 +118,9 @@ impl App {
         if self.rows.is_empty() {
             return;
         }
-        let current = self.table_state.selected().unwrap_or(0);
+        let current = self.selected.unwrap_or(0);
         let next = (current as i32 + delta).clamp(0, self.rows.len() as i32 - 1) as usize;
-        self.table_state.select(Some(next));
+        self.selected = Some(next);
     }
 
     pub fn page_up(&mut self) {
@@ -102,18 +131,14 @@ impl App {
         self.move_cursor(page_step(self.page_size) as i32);
     }
 
-    pub fn selected_index(&self) -> Option<usize> {
-        self.table_state.selected()
-    }
-
     pub fn selected_artifact(&self) -> Option<Artifact> {
-        let selected = self.table_state.selected()?;
+        let selected = self.selected?;
         let row = self.rows.get(selected)?;
         Some(row.artifact.clone())
     }
 
     pub fn deletion_target(&self) -> Option<Artifact> {
-        let selected = self.table_state.selected()?;
+        let selected = self.selected?;
         let row = self.rows.get(selected)?;
         if row.deleting {
             return None;
@@ -163,31 +188,60 @@ impl App {
         }
     }
 
-    pub(super) fn root(&self) -> &Path {
-        &self.root
+    pub fn view_state(&mut self, height: u16, now: Instant, _wall: SystemTime) -> ViewState {
+        let visible = height.saturating_sub(1) as usize;
+        self.page_size = visible;
+        let len = self.rows.len();
+        let mut start = self.scroll.min(len.saturating_sub(1));
+        let selection = self.selected;
+        if let Some(selected) = selection {
+            if selected < start {
+                start = selected;
+            } else if selected >= start + visible.max(1) {
+                start = selected + 1 - visible.max(1);
+            }
+        }
+        self.scroll = start;
+        let end = (start + visible).min(len);
+        let window = self.rows[start..end]
+            .iter()
+            .map(|row| RowView {
+                path: row.artifact.path.clone(),
+                matcher_id: row.artifact.matcher_id,
+                bytes: row.bytes,
+                last_modified: row.last_modified,
+                deleting: row.deleting,
+                failed: row.failed,
+            })
+            .collect();
+        let confirm = self.pending.as_ref().map(|pending| {
+            let peer = self
+                .rows
+                .iter()
+                .find(|row| row_matches(row, &pending.artifact));
+            ConfirmView {
+                path: pending.artifact.path.clone(),
+                matcher_id: pending.artifact.matcher_id,
+                note: pending.note,
+                bytes: peer.and_then(|row| row.bytes),
+                last_modified: peer.and_then(|row| row.last_modified),
+            }
+        });
+        ViewState {
+            scan_status: self.scan_status(now),
+            done: self.done,
+            row_count: len,
+            root: self.root.clone(),
+            potential: format_size(self.total_bytes()),
+            freed: format_size(self.freed_bytes),
+            error_count: self.errors.len(),
+            rows: window,
+            selection: selection.map(|selected| selected - start),
+            confirm,
+        }
     }
 
-    pub(super) fn rows(&self) -> &[Row] {
-        &self.rows
-    }
-
-    pub(super) fn row_for(&self, artifact: &Artifact) -> Option<&Row> {
-        self.rows.iter().find(|row| row_matches(row, artifact))
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
-
-    pub(super) fn error_count(&self) -> usize {
-        self.errors.len()
-    }
-
-    pub(super) fn is_done(&self) -> bool {
-        self.done
-    }
-
-    pub fn scan_status(&self, now: Instant) -> String {
+    fn scan_status(&self, now: Instant) -> String {
         if self.done {
             let elapsed = self
                 .finished
@@ -199,40 +253,16 @@ impl App {
         format!("scanning {}", SPINNER[tick as usize])
     }
 
-    pub(super) fn table_state_mut(&mut self) -> &mut TableState {
-        &mut self.table_state
-    }
-
-    pub(super) fn scroll(&self) -> usize {
-        self.scroll
-    }
-
-    pub(super) fn set_scroll(&mut self, scroll: usize) {
-        self.scroll = scroll;
-    }
-
-    pub(super) fn set_page_size(&mut self, page_size: usize) {
-        self.page_size = page_size;
-    }
-
-    pub(super) fn set_render_selection(&mut self, selected: Option<usize>) {
-        self.table_state.select(selected);
-    }
-
-    pub(super) fn total_bytes(&self) -> u64 {
+    fn total_bytes(&self) -> u64 {
         self.rows.iter().filter_map(|row| row.bytes).sum()
-    }
-
-    pub(super) fn freed_bytes(&self) -> u64 {
-        self.freed_bytes
     }
 
     fn insert_row(&mut self, artifact: Artifact) {
         if !self.seen.insert(artifact.path.clone()) {
             return;
         }
-        if self.table_state.selected().is_none() {
-            self.table_state.select(Some(0));
+        if self.selected.is_none() {
+            self.selected = Some(0);
         }
         self.rows.push(Row {
             path_hash: hash_path(&artifact.path),
@@ -263,16 +293,15 @@ impl App {
         let Some(index) = self.rows.iter().position(|row| row_matches(row, artifact)) else {
             return;
         };
-        let selected = self.table_state.selected();
+        let selected = self.selected;
         self.freed_bytes += self.rows[index].bytes.unwrap_or(0);
         self.rows.remove(index);
         if self.rows.is_empty() {
-            self.table_state.select(None);
+            self.selected = None;
             return;
         }
         if let Some(selected) = selected {
-            self.table_state
-                .select(Some(shift_after_removal(selected, index, self.rows.len())));
+            self.selected = Some(shift_after_removal(selected, index, self.rows.len()));
         }
     }
 
@@ -299,7 +328,7 @@ impl App {
         }
         self.insert_sorted(row);
         let settled = self.rows.iter().position(|row| row_matches(row, artifact));
-        self.table_state.select(settled);
+        self.selected = settled;
     }
 
     fn insert_sorted(&mut self, row: Row) {
@@ -323,12 +352,7 @@ fn page_step(page_size: usize) -> usize {
 }
 
 fn sorts_before(candidate: &Row, bytes: u64, path: &Path) -> bool {
-    match candidate.bytes {
-        None => false,
-        Some(existing) => {
-            existing > bytes || (existing == bytes && candidate.artifact.path.as_path() < path)
-        }
-    }
+    matches!(candidate.bytes, Some(existing) if existing > bytes || (existing == bytes && candidate.artifact.path.as_path() < path))
 }
 
 fn row_matches(row: &Row, artifact: &Artifact) -> bool {
@@ -349,7 +373,6 @@ fn shift_after_removal(selected: usize, removed: usize, remaining: usize) -> usi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn artifact(matcher_id: &'static str, name: &str) -> Artifact {
         Artifact {
@@ -358,7 +381,75 @@ mod tests {
         }
     }
 
-    fn streaming_app() -> App {
+    fn sized_app(count: usize) -> App {
+        let mut app = App::new(PathBuf::from("/root"), Instant::now());
+        for index in 0..count {
+            let name = format!("/root/{index:03}");
+            app.apply(ScanEvent::Found {
+                artifact: artifact("node_modules", &name),
+            });
+            app.apply(ScanEvent::Sized {
+                artifact: artifact("node_modules", &name),
+                bytes: (count - index) as u64 * 100,
+                last_modified: None,
+            });
+        }
+        app.apply(ScanEvent::Done);
+        app
+    }
+
+    fn deleted(artifact: Artifact) -> DeleteResult {
+        DeleteResult {
+            artifact,
+            outcome: DeleteOutcome::Deleted,
+            rescan: None,
+        }
+    }
+
+    #[test]
+    fn window_follows_and_sticks() {
+        let mut app = sized_app(10);
+        app.move_cursor(8);
+        let vs = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(vs.rows[2].path, PathBuf::from("/root/008"));
+        assert_eq!(vs.selection, Some(2));
+        app.move_cursor(-8);
+        let vs = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(vs.rows[0].path, PathBuf::from("/root/000"));
+        assert_eq!(vs.selection, Some(0));
+        app.move_cursor(1);
+        let vs = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(vs.rows[0].path, PathBuf::from("/root/000"));
+        assert_eq!(vs.selection, Some(1));
+    }
+
+    #[test]
+    fn window_clamps_and_survives_edges() {
+        let mut app = sized_app(6);
+        app.move_cursor(5);
+        let _ = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
+        for index in 3..6 {
+            let name = format!("/root/{index:03}");
+            app.apply_delete_result(deleted(artifact("node_modules", &name)));
+        }
+        let shrunk = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(shrunk.rows.last().unwrap().path, PathBuf::from("/root/002"));
+        for index in 0..3 {
+            let name = format!("/root/{index:03}");
+            app.apply_delete_result(deleted(artifact("node_modules", &name)));
+        }
+        let empty = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert!(empty.rows.is_empty());
+        assert_eq!(empty.selection, None);
+        let mut single = sized_app(5);
+        single.move_cursor(3);
+        let vs = single.view_state(1, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert!(vs.rows.is_empty());
+        assert_eq!(vs.selection, Some(0));
+    }
+
+    #[test]
+    fn selection_pins_and_clamps() {
         let mut app = App::new(PathBuf::from("/root"), Instant::now());
         app.apply(ScanEvent::Found {
             artifact: artifact("node_modules", "/root/a"),
@@ -371,72 +462,43 @@ mod tests {
             bytes: 2048,
             last_modified: None,
         });
-        app
-    }
-
-    #[test]
-    fn selection_stays_pinned_while_streaming() {
-        let mut app = streaming_app();
-        assert_eq!(app.selected_index(), Some(0));
-        app.move_cursor(1);
-        assert_eq!(app.selected_index(), Some(0));
-    }
-
-    #[test]
-    fn cursor_moves_and_clamps_after_done() {
-        let mut app = streaming_app();
+        let wall = SystemTime::UNIX_EPOCH;
+        app.apply(ScanEvent::Found {
+            artifact: artifact("node_modules", "/root/c"),
+        });
+        app.apply(ScanEvent::Sized {
+            artifact: artifact("node_modules", "/root/c"),
+            bytes: 1,
+            last_modified: None,
+        });
+        let pinned = app.view_state(10, Instant::now(), wall);
+        assert_eq!(pinned.rows[0].path, PathBuf::from("/root/b"));
         app.apply(ScanEvent::Done);
-        app.move_cursor(1);
-        assert_eq!(app.selected_index(), Some(1));
-        app.move_cursor(-5);
-        assert_eq!(app.selected_index(), Some(0));
+        app.move_cursor(99);
+        let bottom = app.view_state(10, Instant::now(), wall);
+        assert_eq!(bottom.rows[2].path, PathBuf::from("/root/a"));
+        assert_eq!(bottom.selection, Some(2));
+        app.move_cursor(-99);
+        let top = app.view_state(10, Instant::now(), wall);
+        assert_eq!(top.rows[0].path, PathBuf::from("/root/b"));
+        assert_eq!(top.selection, Some(0));
     }
 
     #[test]
-    fn opening_confirmation_stores_pending_artifact() {
-        let mut app = streaming_app();
-        app.apply(ScanEvent::Done);
-        let target = artifact("venv", "/root/b");
-        app.open_confirm(target.clone(), None);
-        assert_eq!(app.pending_confirm(), Some((&target, None)));
-    }
-
-    #[test]
-    fn canceling_confirmation_marks_no_row_deleting() {
-        let mut app = streaming_app();
-        app.apply(ScanEvent::Done);
-        app.open_confirm(artifact("venv", "/root/b"), None);
+    fn confirm_targets_pending_path() {
+        let mut app = sized_app(3);
+        app.open_confirm(artifact("node_modules", "/root/002"), None);
         app.cancel_confirm();
-        assert_eq!(app.pending_confirm(), None);
-        assert!(app.rows().iter().all(|row| !row.deleting));
-    }
-
-    #[test]
-    fn confirming_marks_row_by_path_not_selection() {
-        let mut app = streaming_app();
-        app.apply(ScanEvent::Done);
-        app.open_confirm(artifact("node_modules", "/root/b"), None);
-        app.move_cursor(-1);
-        let confirmed = app.confirm_pending();
-        assert_eq!(confirmed, Some(artifact("node_modules", "/root/b")));
-        assert_eq!(app.pending_confirm(), None);
-        let row = app
-            .rows()
-            .iter()
-            .find(|row| row.artifact.path == PathBuf::from("/root/b"))
-            .unwrap();
-        assert!(row.deleting);
-        assert!(app.rows().iter().filter(|row| row.deleting).count() == 1);
-    }
-
-    #[test]
-    fn confirming_missing_row_clears_pending_without_panic() {
-        let mut app = streaming_app();
-        app.apply(ScanEvent::Done);
-        app.open_confirm(artifact("venv", "/root/gone"), None);
-        let confirmed = app.confirm_pending();
-        assert_eq!(confirmed, None);
-        assert_eq!(app.pending_confirm(), None);
-        assert!(app.rows().iter().all(|row| !row.deleting));
+        let cleared = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert!(cleared.confirm.is_none());
+        assert!(cleared.rows.iter().all(|row| !row.deleting));
+        app.open_confirm(artifact("node_modules", "/root/002"), None);
+        app.confirm_pending();
+        let marked = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert!(!marked.rows[0].deleting);
+        assert!(marked.rows[2].deleting);
+        app.apply_delete_result(deleted(artifact("node_modules", "/root/002")));
+        app.open_confirm(artifact("node_modules", "/root/002"), None);
+        assert!(app.confirm_pending().is_none());
     }
 }
