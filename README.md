@@ -33,7 +33,7 @@ Press <kbd>o</kbd> to open the highlighted folder in your file manager.
 
 **Warning:** pressing <kbd>Space</kbd> or <kbd>Enter</kbd> will **irreversibly** delete the folder **without confirmation**.
 
-Yellow paths indicate that they may be used by the system, e.g. those in `.local`. Take caution when deleting these!
+Yellow paths marked with `⚠️` indicate that they may be used by the system, e.g. those in `.local`. Take caution when deleting these!
 
 ## Acknowledgements
 
@@ -43,4 +43,4 @@ The directory traversal logic is largely taken from [dua-cli](https://github.com
 
 The ethos of this project is also inspired by programs like [ripgrep](https://github.com/BurntSushi/ripgrep) and [fd](https://github.com/sharkdp/fd)!
 
-Built with my own two paws!
+Built with my own two paws :3
