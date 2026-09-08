@@ -189,6 +189,10 @@ impl App {
         }
     }
 
+    pub fn freed_bytes(&self) -> u64 {
+        self.freed_bytes
+    }
+
     pub fn view_state(&mut self, height: u16, now: Instant, _wall: SystemTime) -> ViewState {
         let visible = height.saturating_sub(1) as usize;
         self.page_size = visible;

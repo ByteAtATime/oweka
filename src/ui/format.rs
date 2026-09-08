@@ -1,7 +1,8 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use ratatui::style::{Color, Modifier, Style};
+use crossterm::style::{Color, Stylize, style};
+use ratatui::style::{Color as RatatuiColor, Modifier, Style};
 
 pub(super) const PENDING: &str = "...";
 
@@ -22,6 +23,24 @@ pub(super) fn format_size(bytes: u64) -> String {
     format!("{value:.1} {unit}")
 }
 
+pub fn farewell(freed_bytes: u64, styled: bool) -> String {
+    let amount = paint(&format_size(freed_bytes), Color::Green, true, styled);
+    let thanks = paint("Thanks for using oweka!", Color::DarkGrey, false, styled);
+    format!("\n  Freed space: {amount}\n  {thanks}\n")
+}
+
+fn paint(text: &str, color: Color, bold: bool, styled: bool) -> String {
+    if !styled {
+        return text.to_string();
+    }
+    let content = style(text).with(color);
+    if bold {
+        content.bold().to_string()
+    } else {
+        content.to_string()
+    }
+}
+
 pub(super) fn relative_age(modified: Option<SystemTime>, now: SystemTime) -> String {
     let Some(instant) = modified else {
         return PENDING.to_string();
@@ -33,7 +52,7 @@ pub(super) fn relative_age(modified: Option<SystemTime>, now: SystemTime) -> Str
 pub(super) fn age_style(modified: Option<SystemTime>, now: SystemTime) -> Style {
     let Some(instant) = modified else {
         return Style::default()
-            .fg(Color::DarkGray)
+            .fg(RatatuiColor::DarkGray)
             .add_modifier(Modifier::DIM);
     };
     let age = now.duration_since(instant).unwrap_or(Duration::ZERO);
@@ -43,14 +62,14 @@ pub(super) fn age_style(modified: Option<SystemTime>, now: SystemTime) -> Style 
 fn age_bucket_style(age: Duration) -> Style {
     let seconds = age.as_secs();
     if seconds < 86400 {
-        Style::default().fg(Color::Green)
+        Style::default().fg(RatatuiColor::Green)
     } else if seconds < 86400 * 30 {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(RatatuiColor::Cyan)
     } else if seconds < 86400 * 180 {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(RatatuiColor::Gray)
     } else {
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(RatatuiColor::DarkGray)
             .add_modifier(Modifier::DIM)
     }
 }

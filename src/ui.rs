@@ -2,6 +2,8 @@ mod app;
 mod format;
 mod view;
 
+pub use format::farewell;
+
 use std::io::{self, Stdout};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -31,7 +33,7 @@ pub enum UiEvent {
     Deleted(DeleteResult),
 }
 
-pub fn run(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<()> {
+pub fn run(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<u64> {
     enter_terminal()?;
     let outcome = run_loop(root, scan_events);
     leave_terminal()?;
@@ -60,7 +62,7 @@ fn install_restore_hook() {
     }));
 }
 
-fn run_loop(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<()> {
+fn run_loop(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<u64> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal: Terminal<CrosstermBackend<Stdout>> = Terminal::new(backend)?;
     let mut app = App::new(root.to_path_buf(), Instant::now());
@@ -74,7 +76,7 @@ fn run_loop(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<()> {
         match next_ui_event(&ui_events, &mut app)? {
             UiEvent::Key(key) => {
                 if handle_key(&mut app, key, &ui_sender) {
-                    return Ok(());
+                    return Ok(app.freed_bytes());
                 }
             }
             UiEvent::Tick | UiEvent::Scan(_) | UiEvent::Deleted(_) => {}

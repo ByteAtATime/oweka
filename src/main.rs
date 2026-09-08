@@ -1,4 +1,5 @@
 use std::env;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use oweka::engine;
@@ -14,8 +15,15 @@ fn main() {
         std::process::exit(1);
     }
     let events = engine::scan(&root);
-    if let Err(reason) = ui::run(&root, events) {
-        eprintln!("terminal error: {reason}");
-        std::process::exit(1);
+    match ui::run(&root, events) {
+        Ok(freed_bytes) => {
+            let styled = std::io::stdout().is_terminal()
+                && env::var_os("NO_COLOR").is_none_or(|value| value.is_empty());
+            println!("{}", ui::farewell(freed_bytes, styled));
+        }
+        Err(reason) => {
+            eprintln!("terminal error: {reason}");
+            std::process::exit(1);
+        }
     }
 }
