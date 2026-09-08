@@ -163,7 +163,7 @@ fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
         return false;
     }
     match code {
-        KeyCode::Char('q') => true,
+        KeyCode::Char('q') | KeyCode::Esc => true,
         KeyCode::Char('j') | KeyCode::Down => {
             app.move_cursor(1);
             false

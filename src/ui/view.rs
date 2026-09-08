@@ -78,13 +78,12 @@ fn header_hint(view: &ViewState) -> Line<'static> {
     if view.confirm.is_some() {
         hint_line(&[("y", "confirm"), ("n", "cancel")])
     } else if !view.done {
-        hint_line(&[("q", "quit")])
+        Line::default()
     } else {
         hint_line(&[
             ("j/k/arrows", "move"),
             ("enter/space", "delete"),
             ("o", "open"),
-            ("q", "quit"),
         ])
     }
 }
