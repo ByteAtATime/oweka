@@ -10,7 +10,7 @@ use ratatui::widgets::{
     Table, TableState,
 };
 
-use super::app::{App, MAX_ERROR_ROWS, RowView, ViewState};
+use super::app::{App, MAX_ERROR_ROWS, RowStatus, RowView, ViewState};
 use super::format::{PENDING, age_style, display_path, format_size, relative_age, truncate_left};
 
 const PATH_MIN_WIDTH: u16 = 8;
@@ -19,6 +19,8 @@ const MODIFIED_WIDTH: u16 = 10;
 const SIZE_WIDTH: u16 = 12;
 const HIGHLIGHT_SYMBOL: &str = "▸ ";
 const HIGHLIGHT_WIDTH: u16 = 2;
+const DELETED_PREFIX_LEN: u16 = 10;
+const DELETED_SIZE_LEN: u16 = 7;
 const COLUMN_SPACING: u16 = 1;
 const COLUMN_GAP_COUNT: u16 = 3;
 const MAX_ERROR_WIDTH: u16 = 100;
@@ -145,7 +147,28 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
         .rows
         .iter()
         .map(|row| {
+            let deleted = row.status == RowStatus::Deleted;
             let path = truncate_left(&display_path(&row.path), path_width);
+            let dim = Style::default().fg(Color::DarkGray);
+            if deleted {
+                let path_line = Line::from(vec![
+                    Span::styled("[deleted] ", Style::default().fg(Color::Green)),
+                    Span::styled(path, dim),
+                ]);
+                let modified = relative_age(row.last_modified, wall);
+                let size = row_size_text(row);
+                return TableRow::new([
+                    Cell::from(path_line),
+                    Cell::from(Span::styled(row.matcher_id, dim)),
+                    Cell::from(Span::styled(modified, dim)),
+                    Cell::from(
+                        Line::from(size)
+                            .alignment(Alignment::Right)
+                            .fg(Color::Green),
+                    ),
+                ]);
+            }
+            let failed = row.status == RowStatus::Failed;
             let path_cell = if row.risk.is_some() {
                 Cell::from(Span::styled(path, Style::default().fg(Color::Yellow)))
             } else {
@@ -158,7 +181,7 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
             };
             let modified_style = age_style(row.last_modified, wall);
             let size = row_size_text(row);
-            let modified_cell = if row.failed {
+            let modified_cell = if failed {
                 Cell::from(modified)
             } else {
                 Cell::from(Span::styled(modified, modified_style))
@@ -169,7 +192,7 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
                 modified_cell,
                 Cell::from(Line::from(size).alignment(Alignment::Right)),
             ]);
-            if row.failed {
+            if failed {
                 cells.style(Style::default().fg(Color::Red))
             } else {
                 cells
@@ -209,6 +232,45 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
     };
     let mut state = TableState::default().with_selected(view.selection);
     frame.render_stateful_widget(table, area, &mut state);
+    restore_deleted_markers(frame, view, area);
+}
+
+fn restore_deleted_markers(frame: &mut Frame, view: &ViewState, area: Rect) {
+    let Some(selected) = view.selection else {
+        return;
+    };
+    let Some(row) = view.rows.get(selected) else {
+        return;
+    };
+    if row.status != RowStatus::Deleted {
+        return;
+    }
+    let row_y = area.y.saturating_add(1).saturating_add(selected as u16);
+    if row_y >= area.bottom() {
+        return;
+    }
+    let green = Style::default().fg(Color::Green);
+    let buffer = frame.buffer_mut();
+    for offset in 0..DELETED_PREFIX_LEN {
+        let x = area
+            .x
+            .saturating_add(HIGHLIGHT_WIDTH)
+            .saturating_add(offset);
+        if x >= area.right() {
+            break;
+        }
+        buffer[(x, row_y)].set_style(green);
+    }
+    for offset in 0..DELETED_SIZE_LEN {
+        let x = area
+            .right()
+            .saturating_sub(DELETED_SIZE_LEN)
+            .saturating_add(offset);
+        if x < area.x || x >= area.right() {
+            continue;
+        }
+        buffer[(x, row_y)].set_style(green);
+    }
 }
 
 fn draw_confirm(frame: &mut Frame, view: &ViewState, wall: SystemTime) {
@@ -446,11 +508,12 @@ fn empty_message(view: &ViewState) -> &'static str {
 }
 
 fn row_size_text(row: &RowView) -> String {
-    if row.deleting {
-        String::from("deleting…")
-    } else {
-        row.bytes
+    match row.status {
+        RowStatus::Deleting => String::from("deleting…"),
+        RowStatus::Deleted => String::from("deleted"),
+        RowStatus::Live | RowStatus::Failed => row
+            .bytes
             .map(format_size)
-            .unwrap_or_else(|| PENDING.to_string())
+            .unwrap_or_else(|| PENDING.to_string()),
     }
 }

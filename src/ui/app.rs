@@ -22,13 +22,20 @@ const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
 
 pub(super) const MAX_ERROR_ROWS: u16 = 20;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RowStatus {
+    Live,
+    Deleting,
+    Deleted,
+    Failed,
+}
+
 pub(super) struct Row {
     pub(super) artifact: Artifact,
     path_hash: u64,
     pub(super) bytes: Option<u64>,
     pub(super) last_modified: Option<SystemTime>,
-    pub(super) deleting: bool,
-    pub(super) failed: bool,
+    pub(super) status: RowStatus,
 }
 
 fn hash_path(path: &Path) -> u64 {
@@ -43,8 +50,7 @@ pub struct RowView {
     pub risk: Option<&'static str>,
     pub bytes: Option<u64>,
     pub last_modified: Option<SystemTime>,
-    pub deleting: bool,
-    pub failed: bool,
+    pub status: RowStatus,
 }
 
 pub struct ConfirmView {
@@ -180,16 +186,20 @@ impl App {
     pub fn deletion_target(&self) -> Option<Artifact> {
         let selected = self.selected?;
         let row = self.rows.get(selected)?;
-        if row.deleting {
+        if matches!(row.status, RowStatus::Deleting | RowStatus::Deleted) {
             return None;
         }
         Some(row.artifact.clone())
     }
 
     pub fn mark_deleting(&mut self, artifact: &Artifact) {
-        if let Some(row) = find_row_mut(&mut self.rows, artifact) {
-            row.deleting = true;
+        let Some(row) = find_row_mut(&mut self.rows, artifact) else {
+            return;
+        };
+        if matches!(row.status, RowStatus::Deleting | RowStatus::Deleted) {
+            return;
         }
+        row.status = RowStatus::Deleting;
     }
 
     pub fn open_confirm(&mut self, artifact: Artifact, note: Option<&'static str>) {
@@ -209,16 +219,16 @@ impl App {
     pub fn confirm_pending(&mut self) -> Option<Artifact> {
         let pending = self.pending.take()?;
         let row = find_row_mut(&mut self.rows, &pending.artifact)?;
-        if row.deleting {
+        if matches!(row.status, RowStatus::Deleting | RowStatus::Deleted) {
             return None;
         }
-        row.deleting = true;
+        row.status = RowStatus::Deleting;
         Some(pending.artifact)
     }
 
     pub fn apply_delete_result(&mut self, result: DeleteResult) {
         match result.outcome {
-            DeleteOutcome::Deleted => self.remove_deleted(&result.artifact),
+            DeleteOutcome::Deleted => self.mark_deleted(&result.artifact),
             DeleteOutcome::NotFound => {
                 self.fail_row(&result.artifact, "no longer recognized", result.rescan);
             }
@@ -261,8 +271,7 @@ impl App {
                 risk: row.artifact.risk,
                 bytes: row.bytes,
                 last_modified: row.last_modified,
-                deleting: row.deleting,
-                failed: row.failed,
+                status: row.status,
             })
             .collect();
         let confirm = self.pending.as_ref().map(|pending| {
@@ -283,7 +292,7 @@ impl App {
             done: self.done,
             row_count: len,
             root: self.root.clone(),
-            potential: format_size(self.total_bytes()),
+            potential: format_size(self.potential_bytes()),
             freed: format_size(self.freed_bytes),
             error_count: self.errors.len(),
             errors: self
@@ -314,8 +323,12 @@ impl App {
         format!("scanning {}", SPINNER[tick as usize])
     }
 
-    fn total_bytes(&self) -> u64 {
-        self.rows.iter().filter_map(|row| row.bytes).sum()
+    fn potential_bytes(&self) -> u64 {
+        self.rows
+            .iter()
+            .filter(|row| !matches!(row.status, RowStatus::Deleted))
+            .filter_map(|row| row.bytes)
+            .sum()
     }
 
     fn insert_row(&mut self, artifact: Artifact) {
@@ -330,8 +343,7 @@ impl App {
             artifact,
             bytes: None,
             last_modified: None,
-            deleting: false,
-            failed: false,
+            status: RowStatus::Live,
         });
     }
 
@@ -345,25 +357,23 @@ impl App {
             return;
         };
         let mut row = self.rows.remove(index);
+        if row.status == RowStatus::Deleted {
+            self.freed_bytes += bytes;
+        }
         row.bytes = Some(bytes);
         row.last_modified = last_modified;
         self.insert_sorted(row);
     }
 
-    fn remove_deleted(&mut self, artifact: &Artifact) {
-        let Some(index) = self.rows.iter().position(|row| row_matches(row, artifact)) else {
+    fn mark_deleted(&mut self, artifact: &Artifact) {
+        let Some(row) = find_row_mut(&mut self.rows, artifact) else {
             return;
         };
-        let selected = self.selected;
-        self.freed_bytes += self.rows[index].bytes.unwrap_or(0);
-        self.rows.remove(index);
-        if self.rows.is_empty() {
-            self.selected = None;
+        if row.status == RowStatus::Deleted {
             return;
         }
-        if let Some(selected) = selected {
-            self.selected = Some(shift_after_removal(selected, index, self.rows.len()));
-        }
+        self.freed_bytes += row.bytes.unwrap_or(0);
+        row.status = RowStatus::Deleted;
     }
 
     fn fail_row(&mut self, artifact: &Artifact, reason: &str, rescan: Option<SizeReport>) {
@@ -371,12 +381,10 @@ impl App {
             path: artifact.path.clone(),
             reason: reason.to_string(),
         });
-        let Some(index) = self.rows.iter().position(|row| row_matches(row, artifact)) else {
+        let Some(row) = find_row_mut(&mut self.rows, artifact) else {
             return;
         };
-        let mut row = self.rows.remove(index);
-        row.deleting = false;
-        row.failed = true;
+        row.status = RowStatus::Failed;
         if let Some(report) = rescan {
             row.bytes = Some(report.bytes);
             row.last_modified = report.last_modified;
@@ -387,9 +395,6 @@ impl App {
                 });
             }
         }
-        self.insert_sorted(row);
-        let settled = self.rows.iter().position(|row| row_matches(row, artifact));
-        self.selected = settled;
     }
 
     fn insert_sorted(&mut self, row: Row) {
@@ -422,13 +427,6 @@ fn row_matches(row: &Row, artifact: &Artifact) -> bool {
 
 fn find_row_mut<'rows>(rows: &'rows mut [Row], artifact: &Artifact) -> Option<&'rows mut Row> {
     rows.iter_mut().find(|row| row_matches(row, artifact))
-}
-
-fn shift_after_removal(selected: usize, removed: usize, remaining: usize) -> usize {
-    if selected > removed {
-        return selected - 1;
-    }
-    selected.min(remaining - 1)
 }
 
 #[cfg(test)]
@@ -486,28 +484,70 @@ mod tests {
     }
 
     #[test]
-    fn window_clamps_and_survives_edges() {
+    fn deleted_rows_stay_visible_as_tombstones() {
         let mut app = sized_app(6);
         app.move_cursor(5);
-        let _ = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
         for index in 3..6 {
             let name = format!("/root/{index:03}");
             app.apply_delete_result(deleted(artifact("node_modules", &name)));
         }
-        let shrunk = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
-        assert_eq!(shrunk.rows.last().unwrap().path, PathBuf::from("/root/002"));
-        for index in 0..3 {
-            let name = format!("/root/{index:03}");
-            app.apply_delete_result(deleted(artifact("node_modules", &name)));
+        let marked = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(marked.rows.len(), 6);
+        assert_eq!(marked.rows.last().unwrap().path, PathBuf::from("/root/005"));
+        for row in marked.rows.iter().take(3) {
+            assert_eq!(row.status, RowStatus::Live);
         }
-        let empty = app.view_state(4, Instant::now(), SystemTime::UNIX_EPOCH);
-        assert!(empty.rows.is_empty());
-        assert_eq!(empty.selection, None);
-        let mut single = sized_app(5);
-        single.move_cursor(3);
-        let vs = single.view_state(1, Instant::now(), SystemTime::UNIX_EPOCH);
-        assert!(vs.rows.is_empty());
-        assert_eq!(vs.selection, Some(0));
+        for row in marked.rows.iter().skip(3) {
+            assert_eq!(row.status, RowStatus::Deleted);
+        }
+        assert_eq!(marked.selection, Some(5));
+    }
+
+    #[test]
+    fn successful_delete_marks_row_and_credits_freed_space() {
+        let mut app = sized_app(3);
+        app.move_cursor(1);
+        app.apply_delete_result(deleted(artifact("node_modules", "/root/001")));
+        let state = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(state.rows.len(), 3);
+        assert_eq!(state.rows[1].path, PathBuf::from("/root/001"));
+        assert_eq!(state.rows[1].status, RowStatus::Deleted);
+        assert_eq!(app.freed_bytes(), 200);
+        assert_eq!(state.freed, format_size(200));
+        assert_eq!(state.potential, format_size(400));
+        assert_eq!(state.selection, Some(1));
+        assert!(app.deletion_target().is_none());
+        app.move_cursor(-1);
+        assert!(app.deletion_target().is_some());
+    }
+
+    #[test]
+    fn failed_delete_updates_row_in_place_without_reordering() {
+        let mut app = sized_app(3);
+        app.move_cursor(1);
+        app.apply_delete_result(DeleteResult {
+            artifact: artifact("node_modules", "/root/001"),
+            outcome: DeleteOutcome::NotFound,
+            rescan: Some(SizeReport {
+                bytes: 50,
+                last_modified: None,
+                errors: Vec::new(),
+            }),
+        });
+        let state = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(state.rows.len(), 3);
+        assert_eq!(state.rows[1].path, PathBuf::from("/root/001"));
+        assert_eq!(state.rows[1].status, RowStatus::Failed);
+        assert_eq!(state.rows[1].bytes, Some(50));
+        assert_eq!(state.rows[0].path, PathBuf::from("/root/000"));
+        assert_eq!(state.rows[2].path, PathBuf::from("/root/002"));
+        assert_eq!(state.selection, Some(1));
+        assert_eq!(state.error_count, 1);
+        assert_eq!(state.potential, format_size(450));
+        assert!(app.deletion_target().is_some());
+        app.mark_deleting(&artifact("node_modules", "/root/001"));
+        let retried = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(retried.rows[1].status, RowStatus::Deleting);
     }
 
     #[test]
@@ -553,12 +593,12 @@ mod tests {
         app.cancel_confirm();
         let cleared = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
         assert!(cleared.confirm.is_none());
-        assert!(cleared.rows.iter().all(|row| !row.deleting));
+        assert!(cleared.rows.iter().all(|row| row.status == RowStatus::Live));
         app.open_confirm(artifact("node_modules", "/root/002"), None);
         app.confirm_pending();
         let marked = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
-        assert!(!marked.rows[0].deleting);
-        assert!(marked.rows[2].deleting);
+        assert_eq!(marked.rows[0].status, RowStatus::Live);
+        assert_eq!(marked.rows[2].status, RowStatus::Deleting);
         app.apply_delete_result(deleted(artifact("node_modules", "/root/002")));
         app.open_confirm(artifact("node_modules", "/root/002"), None);
         assert!(app.confirm_pending().is_none());
