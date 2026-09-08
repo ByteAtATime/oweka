@@ -25,7 +25,7 @@ Alternatively, you can install it [from the releases page](https://github.com/By
 
 ## Usage
 
-Simply run your installed binary, e.g. `oweka` or `pnpx oweka`. By default, it will recursively scan your current directory; to scan a different one, specify it as the path, i.e. `oweka ~/projects`.
+Simply run your installed binary, e.g. `oweka` or `pnpx oweka`. By default, it will recursively scan your current directory; to scan a different one, specify it as the path, e.g. `oweka ~/projects`.
 
 Move your selection by pressing the <kbd>↓</kbd><kbd>↑</kbd>/<kbd>j</kbd><kbd>k</kbd> keys, and press <kbd>Space</kbd> or <kbd>Enter</kbd> to delete the highlighted folder.
 
@@ -42,3 +42,5 @@ This project takes heavy inspiration from [NPKILL](https://github.com/voidcosmos
 The directory traversal logic is largely taken from [dua-cli](https://github.com/Byron/dua-cli), although I have rewritten most of it for speed.
 
 The ethos of this project is also inspired by programs like [ripgrep](https://github.com/BurntSushi/ripgrep) and [fd](https://github.com/sharkdp/fd)!
+
+Built with my own two paws!
