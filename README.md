@@ -34,3 +34,11 @@ Press <kbd>o</kbd> to open the highlighted folder in your file manager.
 **Warning:** pressing <kbd>Space</kbd> or <kbd>Enter</kbd> will **irreversibly** delete the folder **without confirmation**.
 
 Yellow paths indicate that they may be used by the system, e.g. those in `.local`. Take caution when deleting these!
+
+## Acknowledgements
+
+This project takes heavy inspiration from [NPKILL](https://github.com/voidcosmos/npkill), a similar project aimed at node_modules.
+
+The directory traversal logic is largely taken from [dua-cli](https://github.com/Byron/dua-cli), although I have rewritten most of it for speed.
+
+The ethos of this project is also inspired by programs like [ripgrep](https://github.com/BurntSushi/ripgrep) and [fd](https://github.com/sharkdp/fd)!
