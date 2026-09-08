@@ -42,7 +42,7 @@ on:
   pull_request:
   push:
     tags:
-      - '**[0-9]+.[0-9]+.[0-9]+*'
+      - "**[0-9]+.[0-9]+.[0-9]+*"
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
@@ -295,6 +295,8 @@ jobs:
           persist-credentials: true
           repository: "ByteAtATime/oweka"
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
       # So we have access to the formula
       - name: Fetch homebrew formulae
         uses: actions/download-artifact@v8
