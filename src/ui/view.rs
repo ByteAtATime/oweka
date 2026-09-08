@@ -153,7 +153,11 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
                 RowStatus::Deleting => Some((Color::Yellow, "[deleting] ")),
                 RowStatus::Live | RowStatus::Failed => None,
             };
-            let path = truncate_left(&display_path(&row.path), path_width);
+            let path = format!(
+                "{}{}",
+                truncate_left(&display_path(&row.path), path_width),
+                if row.risk.is_some() { " ⚠" } else { "" }
+            );
             let dim = Style::default().fg(Color::DarkGray);
             if let Some((marker_color, marker)) = tombstone {
                 let path_line = Line::from(vec![
