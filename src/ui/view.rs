@@ -19,8 +19,8 @@ const MODIFIED_WIDTH: u16 = 10;
 const SIZE_WIDTH: u16 = 12;
 const HIGHLIGHT_SYMBOL: &str = "▸ ";
 const HIGHLIGHT_WIDTH: u16 = 2;
-const DELETED_PREFIX_LEN: u16 = 10;
-const DELETED_SIZE_LEN: u16 = 7;
+const DELETED_PREFIX_LEN: u16 = 11;
+const DELETED_SIZE_LEN: u16 = 9;
 const COLUMN_SPACING: u16 = 1;
 const COLUMN_GAP_COUNT: u16 = 3;
 const MAX_ERROR_WIDTH: u16 = 100;
@@ -148,12 +148,16 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
         .rows
         .iter()
         .map(|row| {
-            let deleted = row.status == RowStatus::Deleted;
+            let tombstone = match row.status {
+                RowStatus::Deleted => Some((Color::Green, "[deleted]  ")),
+                RowStatus::Deleting => Some((Color::Yellow, "[deleting] ")),
+                RowStatus::Live | RowStatus::Failed => None,
+            };
             let path = truncate_left(&display_path(&row.path), path_width);
             let dim = Style::default().fg(Color::DarkGray);
-            if deleted {
+            if let Some((marker_color, marker)) = tombstone {
                 let path_line = Line::from(vec![
-                    Span::styled("[deleted] ", Style::default().fg(Color::Green)),
+                    Span::styled(marker, Style::default().fg(marker_color)),
                     Span::styled(path, dim),
                 ]);
                 let modified = relative_age(row.last_modified, wall);
@@ -165,7 +169,7 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
                     Cell::from(
                         Line::from(size)
                             .alignment(Alignment::Right)
-                            .fg(Color::Green),
+                            .fg(marker_color),
                     ),
                 ]);
             }
@@ -237,14 +241,16 @@ fn restore_deleted_markers(frame: &mut Frame, view: &ViewState, area: Rect) {
     let Some(row) = view.rows.get(selected) else {
         return;
     };
-    if row.status != RowStatus::Deleted {
-        return;
-    }
+    let marker_color = match row.status {
+        RowStatus::Deleted => Color::Green,
+        RowStatus::Deleting => Color::Yellow,
+        RowStatus::Live | RowStatus::Failed => return,
+    };
     let row_y = area.y.saturating_add(1).saturating_add(selected as u16);
     if row_y >= area.bottom() {
         return;
     }
-    let green = Style::default().fg(Color::Green);
+    let marker = Style::default().fg(marker_color);
     let buffer = frame.buffer_mut();
     for offset in 0..DELETED_PREFIX_LEN {
         let x = area
@@ -254,7 +260,7 @@ fn restore_deleted_markers(frame: &mut Frame, view: &ViewState, area: Rect) {
         if x >= area.right() {
             break;
         }
-        buffer[(x, row_y)].set_style(green);
+        buffer[(x, row_y)].set_style(marker);
     }
     for offset in 0..DELETED_SIZE_LEN {
         let x = area
@@ -264,7 +270,7 @@ fn restore_deleted_markers(frame: &mut Frame, view: &ViewState, area: Rect) {
         if x < area.x || x >= area.right() {
             continue;
         }
-        buffer[(x, row_y)].set_style(green);
+        buffer[(x, row_y)].set_style(marker);
     }
 }
 
