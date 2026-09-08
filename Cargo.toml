@@ -3,7 +3,7 @@ name = "oweka"
 description = "Performant TUI tool that lets you delete artifact directories (e.g. node_modules, target)"
 repository = "https://github.com/ByteAtATime/oweka.git"
 homepage = "https://github.com/ByteAtATime/oweka"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 
