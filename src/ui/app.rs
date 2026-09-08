@@ -9,8 +9,8 @@ use crate::engine::{DeleteOutcome, DeleteResult, SizeReport};
 use crate::matcher::Artifact;
 
 struct ScanError {
-    path: PathBuf,
-    reason: String,
+    pub(super) path: PathBuf,
+    pub(super) reason: String,
 }
 
 struct Pending {
@@ -19,6 +19,8 @@ struct Pending {
 }
 
 const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+
+pub(super) const MAX_ERROR_ROWS: u16 = 20;
 
 pub(super) struct Row {
     pub(super) artifact: Artifact,
@@ -53,6 +55,11 @@ pub struct ConfirmView {
     pub last_modified: Option<SystemTime>,
 }
 
+pub struct ErrorView {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
 pub struct ViewState {
     pub scan_status: String,
     pub done: bool,
@@ -61,6 +68,9 @@ pub struct ViewState {
     pub potential: String,
     pub freed: String,
     pub error_count: usize,
+    pub errors: Vec<ErrorView>,
+    pub errors_open: bool,
+    pub error_scroll: usize,
     pub rows: Vec<RowView>,
     pub selection: Option<usize>,
     pub confirm: Option<ConfirmView>,
@@ -79,6 +89,9 @@ pub struct App {
     page_size: usize,
     selected: Option<usize>,
     pending: Option<Pending>,
+    show_errors: bool,
+    error_scroll: usize,
+    error_page: usize,
 }
 
 impl App {
@@ -96,6 +109,9 @@ impl App {
             page_size: 0,
             selected: None,
             pending: None,
+            show_errors: false,
+            error_scroll: 0,
+            error_page: 0,
         }
     }
 
@@ -110,6 +126,29 @@ impl App {
             ScanEvent::WalkError { path, reason } => self.errors.push(ScanError { path, reason }),
             ScanEvent::Done => self.finish(),
         }
+    }
+
+    pub fn toggle_errors(&mut self) {
+        self.show_errors = !self.show_errors;
+        if self.show_errors {
+            self.error_scroll = 0;
+        }
+    }
+
+    pub fn close_errors(&mut self) {
+        self.show_errors = false;
+    }
+
+    pub fn errors_open(&self) -> bool {
+        self.show_errors
+    }
+
+    pub fn scroll_errors(&mut self, delta: i32) {
+        if self.errors.is_empty() {
+            return;
+        }
+        let last = self.errors.len().saturating_sub(self.error_page.max(1)) as i32;
+        self.error_scroll = (self.error_scroll as i32 + delta).clamp(0, last) as usize;
     }
 
     pub fn move_cursor(&mut self, delta: i32) {
@@ -196,6 +235,12 @@ impl App {
     pub fn view_state(&mut self, height: u16, now: Instant, _wall: SystemTime) -> ViewState {
         let visible = height.saturating_sub(1) as usize;
         self.page_size = visible;
+        self.error_page = (MAX_ERROR_ROWS as usize)
+            .min(height.saturating_sub(5) as usize)
+            .max(1);
+        self.error_scroll = self
+            .error_scroll
+            .min(self.errors.len().saturating_sub(self.error_page));
         let len = self.rows.len();
         let mut start = self.scroll.min(len.saturating_sub(1));
         let selection = self.selected;
@@ -241,6 +286,16 @@ impl App {
             potential: format_size(self.total_bytes()),
             freed: format_size(self.freed_bytes),
             error_count: self.errors.len(),
+            errors: self
+                .errors
+                .iter()
+                .map(|error| ErrorView {
+                    path: error.path.clone(),
+                    reason: error.reason.clone(),
+                })
+                .collect(),
+            errors_open: self.show_errors,
+            error_scroll: self.error_scroll,
             rows: window,
             selection: selection.map(|selected| selected - start),
             confirm,

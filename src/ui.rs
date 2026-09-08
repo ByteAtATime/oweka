@@ -162,8 +162,28 @@ fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
         }
         return false;
     }
+    if app.errors_open() {
+        match code {
+            KeyCode::Char('e') | KeyCode::Esc => {
+                app.close_errors();
+            }
+            KeyCode::Char('q') => return true,
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.scroll_errors(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.scroll_errors(-1);
+            }
+            _ => {}
+        }
+        return false;
+    }
     match code {
         KeyCode::Char('q') | KeyCode::Esc => true,
+        KeyCode::Char('e') => {
+            app.toggle_errors();
+            false
+        }
         KeyCode::Char('j') | KeyCode::Down => {
             app.move_cursor(1);
             false

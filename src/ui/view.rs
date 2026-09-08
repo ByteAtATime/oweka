@@ -10,7 +10,7 @@ use ratatui::widgets::{
     Table, TableState,
 };
 
-use super::app::{App, RowView, ViewState};
+use super::app::{App, MAX_ERROR_ROWS, RowView, ViewState};
 use super::format::{PENDING, age_style, display_path, format_size, relative_age, truncate_left};
 
 const PATH_MIN_WIDTH: u16 = 8;
@@ -21,6 +21,7 @@ const HIGHLIGHT_SYMBOL: &str = "▸ ";
 const HIGHLIGHT_WIDTH: u16 = 2;
 const COLUMN_SPACING: u16 = 1;
 const COLUMN_GAP_COUNT: u16 = 3;
+const MAX_ERROR_WIDTH: u16 = 100;
 
 pub fn draw(frame: &mut Frame, app: &mut App, now: Instant, wall: SystemTime) {
     let areas = Layout::default()
@@ -36,6 +37,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, now: Instant, wall: SystemTime) {
     draw_table(frame, &view, areas[1], wall);
     draw_status(frame, &view, areas[2]);
     draw_confirm(frame, &view, wall);
+    draw_errors(frame, &view);
 }
 
 fn draw_header(frame: &mut Frame, view: &ViewState, area: Rect) {
@@ -77,15 +79,23 @@ fn draw_header(frame: &mut Frame, view: &ViewState, area: Rect) {
 fn header_hint(view: &ViewState) -> Line<'static> {
     if view.confirm.is_some() {
         hint_line(&[("y", "confirm"), ("n", "cancel")])
+    } else if view.errors_open {
+        hint_line(&[("Esc/e", "close errors")])
     } else if !view.done {
         Line::default()
     } else {
-        hint_line(&[
-            ("j/k/arrows", "move"),
-            ("enter/space", "delete"),
-            ("o", "open"),
-        ])
+        done_hints(view)
     }
+}
+
+fn done_hints(view: &ViewState) -> Line<'static> {
+    let mut pairs = Vec::with_capacity(3);
+    if view.row_count > view.rows.len() {
+        pairs.push(("j/k/arrows", "move"));
+    }
+    pairs.push(("enter/space", "delete"));
+    pairs.push(("o", "open"));
+    hint_line(&pairs)
 }
 
 fn hint_line(pairs: &[(&'static str, &'static str)]) -> Line<'static> {
@@ -192,7 +202,9 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
         .row_highlight_style(row_highlight);
     let table = match view.confirm {
         Some(_) => table.style(Style::default().add_modifier(Modifier::DIM)),
-        None if scanning => table.style(Style::default().add_modifier(Modifier::DIM)),
+        None if scanning || view.errors_open => {
+            table.style(Style::default().add_modifier(Modifier::DIM))
+        }
         None => table,
     };
     let mut state = TableState::default().with_selected(view.selection);
@@ -356,12 +368,73 @@ fn path_column_width(area: Rect) -> usize {
 }
 
 fn draw_status(frame: &mut Frame, view: &ViewState, area: Rect) {
-    let first = Line::from(Span::raw(format!(
-        "Potential Space {} · Freed Space {} · errors {}",
-        view.potential, view.freed, view.error_count
-    )))
+    let first = Line::from(vec![
+        Span::raw(format!(
+            "Potential Space {} · Freed Space {} · errors {} ",
+            view.potential, view.freed, view.error_count
+        )),
+        Span::styled("[e]", Style::default().add_modifier(Modifier::BOLD)),
+    ])
     .dim();
     frame.render_widget(Paragraph::new(first), area);
+}
+
+fn draw_errors(frame: &mut Frame, view: &ViewState) {
+    if !view.errors_open {
+        return;
+    }
+    let area = frame.area();
+    if area.width < 24 || area.height < 6 {
+        return;
+    }
+    let width = (area.width.saturating_sub(8)).clamp(22, MAX_ERROR_WIDTH);
+    let inner_width = width.saturating_sub(8) as usize;
+    let visible = (MAX_ERROR_ROWS as usize)
+        .min(area.height.saturating_sub(8) as usize)
+        .max(1);
+    let start = view
+        .error_scroll
+        .min(view.errors.len().saturating_sub(visible));
+    let shown = if view.errors.is_empty() {
+        1
+    } else {
+        view.errors.len().min(visible)
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("Scan errors ({})", view.error_count),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+    ];
+    if view.errors.is_empty() {
+        lines.push(Line::from("no errors"));
+    }
+    for error in view.errors.iter().skip(start).take(visible) {
+        lines.push(Line::from(vec![
+            Span::raw(truncate_left(
+                &error.path.display().to_string(),
+                inner_width / 2,
+            )),
+            Span::raw(" "),
+            Span::styled(
+                error.reason.clone(),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
+        ]));
+    }
+    let height = (2 + shown as u16 + 4)
+        .min(area.height.saturating_sub(2))
+        .max(5);
+    let pane = centered(area, width, height);
+    frame.render_widget(Clear, pane);
+    let block = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .padding(Padding::new(2, 2, 1, 1)),
+    );
+    frame.render_widget(block, pane);
 }
 
 fn empty_message(view: &ViewState) -> &'static str {
