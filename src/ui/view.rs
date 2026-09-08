@@ -37,6 +37,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, now: Instant, wall: SystemTime) {
     let view = app.view_state(areas[1].height, now, wall);
     draw_header(frame, &view, areas[0]);
     draw_table(frame, &view, areas[1], wall);
+    draw_loader(frame, &view, areas[1]);
     draw_status(frame, &view, areas[2]);
     draw_confirm(frame, &view, wall);
     draw_errors(frame, &view);
@@ -205,18 +206,10 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
         Constraint::Length(MODIFIED_WIDTH),
         Constraint::Length(SIZE_WIDTH),
     ];
-    let scanning = !view.done;
-    let row_highlight = if scanning {
-        Style::default()
-            .fg(Color::Gray)
-            .bg(Color::Black)
-            .add_modifier(Modifier::DIM)
-    } else {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    };
+    let row_highlight = Style::default()
+        .fg(Color::Black)
+        .bg(Color::White)
+        .add_modifier(Modifier::BOLD);
     let table = Table::new(body, widths)
         .header(header)
         .column_spacing(COLUMN_SPACING)
@@ -225,17 +218,19 @@ fn draw_table(frame: &mut Frame, view: &ViewState, area: Rect, wall: SystemTime)
         .row_highlight_style(row_highlight);
     let table = match view.confirm {
         Some(_) => table.style(Style::default().add_modifier(Modifier::DIM)),
-        None if scanning || view.errors_open => {
-            table.style(Style::default().add_modifier(Modifier::DIM))
-        }
+        None if view.errors_open => table.style(Style::default().add_modifier(Modifier::DIM)),
         None => table,
     };
-    let mut state = TableState::default().with_selected(view.selection);
+    let selection = view.selection.filter(|_| view.done);
+    let mut state = TableState::default().with_selected(selection);
     frame.render_stateful_widget(table, area, &mut state);
     restore_deleted_markers(frame, view, area);
 }
 
 fn restore_deleted_markers(frame: &mut Frame, view: &ViewState, area: Rect) {
+    if !view.done {
+        return;
+    }
     let Some(selected) = view.selection else {
         return;
     };
@@ -271,6 +266,45 @@ fn restore_deleted_markers(frame: &mut Frame, view: &ViewState, area: Rect) {
         }
         buffer[(x, row_y)].set_style(green);
     }
+}
+
+fn draw_loader(frame: &mut Frame, view: &ViewState, area: Rect) {
+    if view.done {
+        return;
+    }
+    if area.width < 24 || area.height < 6 {
+        return;
+    }
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let status = Line::from(vec![
+        Span::raw(view.scan_status.clone()),
+        Span::styled(format!(" {}s", view.elapsed_secs), dim),
+    ]);
+    let count = Line::from(vec![
+        Span::raw(view.row_count.to_string()),
+        Span::styled(String::from(" found"), dim),
+        Span::styled(String::from(" \u{b7} "), dim),
+        Span::raw(view.potential.clone()),
+    ]);
+    let body = vec![status, count];
+    let longest = body.iter().map(Line::width).max().unwrap_or(0);
+    let width = longest
+        .saturating_add(4)
+        .max(28)
+        .min(area.width.saturating_sub(2) as usize)
+        .max(1) as u16;
+    let height = 6;
+    let loader = centered(area, width, height);
+    frame.render_widget(Clear, loader);
+    frame.render_widget(
+        Paragraph::new(body).alignment(Alignment::Center).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .padding(Padding::vertical(1)),
+        ),
+        loader,
+    );
 }
 
 fn draw_confirm(frame: &mut Frame, view: &ViewState, wall: SystemTime) {

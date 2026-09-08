@@ -150,6 +150,9 @@ fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
         return true;
     }
+    if !app.is_done() {
+        return matches!(code, KeyCode::Char('q') | KeyCode::Esc);
+    }
     if app.pending_confirm().is_some() {
         match code {
             KeyCode::Char('y') => {

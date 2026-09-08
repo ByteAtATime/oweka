@@ -68,6 +68,7 @@ pub struct ErrorView {
 
 pub struct ViewState {
     pub scan_status: String,
+    pub elapsed_secs: u64,
     pub done: bool,
     pub row_count: usize,
     pub root: PathBuf,
@@ -147,6 +148,10 @@ impl App {
 
     pub fn errors_open(&self) -> bool {
         self.show_errors
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.done
     }
 
     pub fn scroll_errors(&mut self, delta: i32) {
@@ -289,6 +294,7 @@ impl App {
         });
         ViewState {
             scan_status: self.scan_status(now),
+            elapsed_secs: elapsed_secs(self.done, self.started, now),
             done: self.done,
             row_count: len,
             root: self.root.clone(),
@@ -410,11 +416,23 @@ impl App {
     fn finish(&mut self) {
         self.done = true;
         self.finished = Some(Instant::now());
+        if self.rows.is_empty() {
+            self.selected = None;
+        } else {
+            self.selected = Some(0);
+        }
     }
 }
 
 fn page_step(page_size: usize) -> usize {
     page_size.saturating_sub(1).max(1)
+}
+
+fn elapsed_secs(done: bool, started: Instant, now: Instant) -> u64 {
+    if done {
+        return 0;
+    }
+    now.saturating_duration_since(started).as_secs()
 }
 
 fn sorts_before(candidate: &Row, bytes: u64, path: &Path) -> bool {
