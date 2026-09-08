@@ -14,8 +14,8 @@ fn main() {
         eprintln!("{} does not exist or is not a directory", root.display());
         std::process::exit(1);
     }
-    let events = engine::scan(&root);
-    match ui::run(&root, events) {
+    let (events, abort) = engine::scan(&root);
+    match ui::run(&root, events, abort) {
         Ok(freed_bytes) => {
             let styled = std::io::stdout().is_terminal()
                 && env::var_os("NO_COLOR").is_none_or(|value| value.is_empty());

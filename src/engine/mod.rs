@@ -5,6 +5,7 @@ use std::fs::{self, DirEntry};
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -32,20 +33,34 @@ pub enum ScanEvent {
     Done,
 }
 
-pub fn scan(root: &Path) -> Receiver<ScanEvent> {
-    let (events, receiver) = mpsc::channel();
-    let root = root.to_path_buf();
-    thread::spawn(move || run_pipeline(&root, &events));
-    receiver
+pub struct AbortHandle {
+    aborted: Arc<AtomicBool>,
 }
 
-fn run_pipeline(root: &Path, events: &Sender<ScanEvent>) {
+impl AbortHandle {
+    pub fn abort(&self) {
+        self.aborted.store(true, Ordering::Release);
+    }
+}
+
+pub fn scan(root: &Path) -> (Receiver<ScanEvent>, AbortHandle) {
+    let (events, receiver) = mpsc::channel();
+    let root = root.to_path_buf();
+    let aborted = Arc::new(AtomicBool::new(false));
+    let handle = AbortHandle {
+        aborted: Arc::clone(&aborted),
+    };
+    thread::spawn(move || run_pipeline(&root, &events, &aborted));
+    (receiver, handle)
+}
+
+fn run_pipeline(root: &Path, events: &Sender<ScanEvent>, aborted: &Arc<AtomicBool>) {
     let (jobs, queue) = mpsc::channel::<Artifact>();
     let shared = Arc::new(Mutex::new(queue));
     let sizers: Vec<_> = (0..worker_count().get())
-        .map(|_| spawn_sizer(Arc::clone(&shared), events.clone()))
+        .map(|_| spawn_sizer(Arc::clone(&shared), events.clone(), Arc::clone(aborted)))
         .collect();
-    discover(root, &jobs, events);
+    discover(root, &jobs, events, aborted);
     drop(jobs);
     for sizer in sizers {
         let _ = sizer.join();
@@ -56,10 +71,14 @@ fn run_pipeline(root: &Path, events: &Sender<ScanEvent>) {
 fn spawn_sizer(
     queue: Arc<Mutex<Receiver<Artifact>>>,
     events: Sender<ScanEvent>,
+    aborted: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        while let Some(artifact) = next_job(&queue) {
-            let report = size_artifact(&artifact);
+        while let Some(artifact) = next_job(&queue, &aborted) {
+            let report = size_artifact_abortable(&artifact, &aborted);
+            if aborted.load(Ordering::Acquire) {
+                return;
+            }
             for error in &report.errors {
                 let _ = events.send(ScanEvent::WalkError {
                     path: error.path.clone(),
@@ -75,7 +94,10 @@ fn spawn_sizer(
     })
 }
 
-fn next_job(queue: &Mutex<Receiver<Artifact>>) -> Option<Artifact> {
+fn next_job(queue: &Mutex<Receiver<Artifact>>, aborted: &AtomicBool) -> Option<Artifact> {
+    if aborted.load(Ordering::Acquire) {
+        return None;
+    }
     queue.lock().unwrap().recv().ok()
 }
 
@@ -121,9 +143,16 @@ pub struct DeleteResult {
 }
 
 pub fn size_artifact(artifact: &Artifact) -> SizeReport {
+    size_artifact_abortable(artifact, &AtomicBool::new(false))
+}
+
+fn size_artifact_abortable(artifact: &Artifact, aborted: &AtomicBool) -> SizeReport {
     let mut report = SizeReport::default();
     let mut pending = vec![artifact.path.clone()];
     while let Some(directory) = pending.pop() {
+        if aborted.load(Ordering::Acquire) {
+            return report;
+        }
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(reason) => {
@@ -233,8 +262,13 @@ fn report_walk_error(path: &Path, reason: &io::Error, events: &Sender<ScanEvent>
     });
 }
 
-fn discover(root: &Path, jobs: &Sender<Artifact>, events: &Sender<ScanEvent>) {
-    let frontier = Frontier::new(root.to_path_buf());
+fn discover(
+    root: &Path,
+    jobs: &Sender<Artifact>,
+    events: &Sender<ScanEvent>,
+    aborted: &Arc<AtomicBool>,
+) {
+    let frontier = Frontier::new(root.to_path_buf(), aborted);
     while let Some(item) = frontier.next() {
         match item {
             WalkItem::WalkError { path, reason } => report_walk_error(&path, &reason, events),

@@ -3,8 +3,10 @@ use std::fs;
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use std::time::Duration;
 
 pub(super) enum WalkItem {
     Dir(PathBuf),
@@ -19,6 +21,7 @@ pub(super) struct Frontier {
 struct Shared {
     state: Mutex<State>,
     ready: Condvar,
+    aborted: Arc<AtomicBool>,
 }
 
 struct State {
@@ -29,7 +32,7 @@ struct State {
 }
 
 impl Frontier {
-    pub(super) fn new(root: PathBuf) -> Self {
+    pub(super) fn new(root: PathBuf, aborted: &Arc<AtomicBool>) -> Self {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 items: VecDeque::from([WalkItem::Dir(root)]),
@@ -38,6 +41,7 @@ impl Frontier {
                 done: false,
             }),
             ready: Condvar::new(),
+            aborted: Arc::clone(aborted),
         });
         let workers = thread::available_parallelism()
             .unwrap_or(NonZeroUsize::new(4).unwrap())
@@ -57,6 +61,12 @@ impl Frontier {
     pub(super) fn next(&self) -> Option<WalkItem> {
         let mut state = self.shared.state.lock().unwrap();
         loop {
+            if self.shared.aborted.load(Ordering::Acquire) {
+                state.done = true;
+                drop(state);
+                self.shared.ready.notify_all();
+                return None;
+            }
             if let Some(item) = state.items.pop_front() {
                 return Some(item);
             }
@@ -66,14 +76,19 @@ impl Frontier {
                 self.shared.ready.notify_all();
                 return None;
             }
-            state = self.shared.ready.wait(state).unwrap();
+            let waited = self
+                .shared
+                .ready
+                .wait_timeout(state, Duration::from_millis(10))
+                .unwrap();
+            state = waited.0;
         }
     }
 
     pub(super) fn expand(&self, dir: &Path) {
         {
             let mut state = self.shared.state.lock().unwrap();
-            if state.done {
+            if state.done || self.shared.aborted.load(Ordering::Acquire) {
                 return;
             }
             state.work.push_back(dir.to_path_buf());
@@ -101,8 +116,18 @@ fn run_worker(shared: &Shared) {
     loop {
         let directory = {
             let mut state = shared.state.lock().unwrap();
-            while state.work.is_empty() && !state.done {
-                state = shared.ready.wait(state).unwrap();
+            loop {
+                if shared.aborted.load(Ordering::Acquire) || state.done {
+                    return;
+                }
+                if !state.work.is_empty() {
+                    break;
+                }
+                let waited = shared
+                    .ready
+                    .wait_timeout(state, Duration::from_millis(10))
+                    .unwrap();
+                state = waited.0;
             }
             match state.work.pop_front() {
                 Some(directory) => {

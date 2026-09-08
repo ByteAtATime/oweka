@@ -534,11 +534,13 @@ fn draw_errors(frame: &mut Frame, view: &ViewState) {
 }
 
 fn empty_message(view: &ViewState) -> &'static str {
-    if view.done {
-        "no artifacts found"
-    } else {
-        "waiting for artifacts…"
+    if !view.done {
+        return "waiting for artifacts…";
     }
+    if view.aborted {
+        return "stopped before any artifacts";
+    }
+    "no artifacts found"
 }
 
 fn row_size_text(row: &RowView) -> String {

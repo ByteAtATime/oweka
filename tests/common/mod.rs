@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use oweka::engine::ScanEvent;
+use oweka::engine::{AbortHandle, ScanEvent};
 
 pub fn write_bytes(path: &Path, size: usize) {
     if let Some(parent) = path.parent() {
@@ -12,7 +12,7 @@ pub fn write_bytes(path: &Path, size: usize) {
     fs::write(path, vec![7u8; size]).unwrap();
 }
 
-pub fn drain(receiver: Receiver<ScanEvent>) -> Vec<ScanEvent> {
+pub fn drain((receiver, _abort): (Receiver<ScanEvent>, AbortHandle)) -> Vec<ScanEvent> {
     let mut events = Vec::new();
     while let Ok(event) = receiver.recv_timeout(Duration::from_secs(10)) {
         let done = matches!(event, ScanEvent::Done);

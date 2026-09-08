@@ -18,7 +18,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use crate::engine::{DeleteResult, ScanEvent, delete_artifact};
+use crate::engine::{AbortHandle, DeleteResult, ScanEvent, delete_artifact};
 use crate::matcher::{Artifact, DeletionPolicy};
 use crate::registry::matcher_for;
 
@@ -33,9 +33,9 @@ pub enum UiEvent {
     Deleted(DeleteResult),
 }
 
-pub fn run(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<u64> {
+pub fn run(root: &Path, scan_events: Receiver<ScanEvent>, abort: AbortHandle) -> io::Result<u64> {
     enter_terminal()?;
-    let outcome = run_loop(root, scan_events);
+    let outcome = run_loop(root, scan_events, abort);
     leave_terminal()?;
     outcome
 }
@@ -62,10 +62,11 @@ fn install_restore_hook() {
     }));
 }
 
-fn run_loop(root: &Path, scan_events: Receiver<ScanEvent>) -> io::Result<u64> {
+fn run_loop(root: &Path, scan_events: Receiver<ScanEvent>, abort: AbortHandle) -> io::Result<u64> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal: Terminal<CrosstermBackend<Stdout>> = Terminal::new(backend)?;
     let mut app = App::new(root.to_path_buf(), Instant::now());
+    app.set_abort_handle(abort);
     let (ui_sender, ui_events) = mpsc::channel();
     spawn_event_thread(ui_sender.clone());
     spawn_scan_bridge(scan_events, ui_sender.clone());
@@ -151,7 +152,11 @@ fn handle_key(app: &mut App, key: KeyEvent, sender: &Sender<UiEvent>) -> bool {
         return true;
     }
     if !app.is_done() {
-        return matches!(code, KeyCode::Char('q') | KeyCode::Esc);
+        if matches!(code, KeyCode::Esc) {
+            app.abort();
+            return false;
+        }
+        return matches!(code, KeyCode::Char('q'));
     }
     if app.pending_confirm().is_some() {
         match code {

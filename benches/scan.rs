@@ -15,6 +15,7 @@ fn bench_root() -> PathBuf {
 
 fn drained_events(root: &Path) -> usize {
     scan(root)
+        .0
         .into_iter()
         .filter(|event| !matches!(event, ScanEvent::Done))
         .count()

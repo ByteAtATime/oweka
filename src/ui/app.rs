@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use super::format::format_size;
+use crate::engine::AbortHandle;
 use crate::engine::ScanEvent;
 use crate::engine::{DeleteOutcome, DeleteResult, SizeReport};
 use crate::matcher::Artifact;
@@ -70,6 +71,7 @@ pub struct ViewState {
     pub scan_status: String,
     pub elapsed_secs: u64,
     pub done: bool,
+    pub aborted: bool,
     pub row_count: usize,
     pub root: PathBuf,
     pub potential: String,
@@ -90,6 +92,8 @@ pub struct App {
     errors: Vec<ScanError>,
     freed_bytes: u64,
     done: bool,
+    aborted: bool,
+    abort_handle: Option<AbortHandle>,
     started: Instant,
     finished: Option<Instant>,
     scroll: usize,
@@ -110,6 +114,8 @@ impl App {
             errors: Vec::new(),
             freed_bytes: 0,
             done: false,
+            aborted: false,
+            abort_handle: None,
             started,
             finished: None,
             scroll: 0,
@@ -122,7 +128,25 @@ impl App {
         }
     }
 
+    pub fn set_abort_handle(&mut self, handle: AbortHandle) {
+        self.abort_handle = Some(handle);
+    }
+
+    pub fn abort(&mut self) {
+        if self.done {
+            return;
+        }
+        if let Some(handle) = self.abort_handle.take() {
+            handle.abort();
+        }
+        self.aborted = true;
+        self.finish();
+    }
+
     pub fn apply(&mut self, event: ScanEvent) {
+        if self.aborted {
+            return;
+        }
         match event {
             ScanEvent::Found { artifact } => self.insert_row(artifact),
             ScanEvent::Sized {
@@ -296,6 +320,7 @@ impl App {
             scan_status: self.scan_status(now),
             elapsed_secs: elapsed_secs(self.done, self.started, now),
             done: self.done,
+            aborted: self.aborted,
             row_count: len,
             root: self.root.clone(),
             potential: format_size(self.potential_bytes()),
@@ -318,6 +343,9 @@ impl App {
     }
 
     fn scan_status(&self, now: Instant) -> String {
+        if self.aborted {
+            return format!("stopped · {} artifacts", self.rows.len());
+        }
         if self.done {
             let elapsed = self
                 .finished
@@ -482,6 +510,52 @@ mod tests {
             outcome: DeleteOutcome::Deleted,
             rescan: None,
         }
+    }
+
+    #[test]
+    fn abort_freezes_rows_and_reports_stopped() {
+        let mut app = App::new(PathBuf::from("/root"), Instant::now());
+        for index in 0..3 {
+            let name = format!("/root/{index:03}");
+            app.apply(ScanEvent::Found {
+                artifact: artifact("node_modules", &name),
+            });
+            app.apply(ScanEvent::Sized {
+                artifact: artifact("node_modules", &name),
+                bytes: 100,
+                last_modified: None,
+            });
+        }
+        let frozen = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(frozen.row_count, 3);
+        app.abort();
+        assert!(app.is_done());
+        app.apply(ScanEvent::Found {
+            artifact: artifact("node_modules", "/root/999"),
+        });
+        app.apply(ScanEvent::Sized {
+            artifact: artifact("node_modules", "/root/999"),
+            bytes: 9999,
+            last_modified: None,
+        });
+        app.apply(ScanEvent::Done);
+        let state = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert_eq!(state.row_count, 3);
+        assert!(state.done);
+        assert_eq!(state.selection, Some(0));
+        assert!(state.scan_status.contains("stopped · 3 artifacts"));
+        app.abort();
+        assert!(app.is_done());
+    }
+
+    #[test]
+    fn abort_after_done_keeps_done_status() {
+        let mut app = sized_app(2);
+        let before = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert!(before.scan_status.contains("done in"));
+        app.abort();
+        let after = app.view_state(10, Instant::now(), SystemTime::UNIX_EPOCH);
+        assert!(after.scan_status.contains("done in"));
     }
 
     #[test]
